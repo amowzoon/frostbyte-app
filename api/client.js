@@ -1,24 +1,34 @@
 import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '../lib/supabase';
 
-// Change this to your backend URL.
-// While developing, use your computer's local IP address (not localhost).
-// Find it by running `ipconfig` on Windows — look for IPv4 Address.
-// Example: http://192.168.1.45:8000
-export const BASE_URL = 'http://10.0.0.18:8000';
+// Public backend URL via ngrok tunnel.
+// Update this whenever ngrok restarts (free plan gives a new URL each time).
+export const BASE_URL = 'https://superprosperous-arnulfo-pebbly.ngrok-free.dev';
 
 const client = axios.create({
   baseURL: BASE_URL,
   timeout: 10000,
+  headers: {
+    // Required to bypass ngrok's browser warning page
+    'ngrok-skip-browser-warning': 'true',
+  },
 });
 
-// Automatically attach JWT token to every request
+// Automatically attach the Supabase JWT to every backend request
 client.interceptors.request.use(async (config) => {
-  const token = await AsyncStorage.getItem('auth_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.access_token) {
+    config.headers.Authorization = `Bearer ${session.access_token}`;
   }
   return config;
 });
+
+client.interceptors.response.use(
+  response => response,
+  error => {
+    console.warn('API error:', error.response?.status, error.response?.data, error.config?.url);
+    return Promise.reject(error);
+  }
+);
 
 export default client;
