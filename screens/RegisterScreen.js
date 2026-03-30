@@ -4,11 +4,10 @@ import {
   StyleSheet, ActivityIndicator, KeyboardAvoidingView,
   Platform, Alert
 } from 'react-native';
-import client from '../api/client';
 import { useAuth } from '../context/AuthContext';
 
 export default function RegisterScreen({ navigation }) {
-  const { login } = useAuth();
+  const { register } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -29,10 +28,19 @@ export default function RegisterScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      const res = await client.post('/api/app/register', { email, password });
-      await login(res.data.token, res.data.user_id);
+      const data = await register(email, password);
+      // If Supabase email confirmation is enabled, inform the user
+      if (data.user && !data.session) {
+        Alert.alert(
+          'Check your email',
+          'A confirmation link has been sent to ' + email + '. Click it to activate your account.',
+          [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
+        );
+      }
+      // If email confirmation is disabled, session is set automatically
+      // and navigation happens via AuthContext
     } catch (err) {
-      Alert.alert('Registration Failed', err.response?.data?.detail || 'Something went wrong.');
+      Alert.alert('Registration Failed', err.message || 'Something went wrong.');
     } finally {
       setLoading(false);
     }
@@ -81,7 +89,9 @@ export default function RegisterScreen({ navigation }) {
         </TouchableOpacity>
 
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.link}>Already have an account? <Text style={styles.linkBold}>Sign In</Text></Text>
+          <Text style={styles.link}>
+            Already have an account? <Text style={styles.linkBold}>Sign In</Text>
+          </Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -89,57 +99,20 @@ export default function RegisterScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#1a1a2e',
-  },
-  inner: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#888',
-    textAlign: 'center',
-    marginBottom: 40,
-  },
+  container: { flex: 1, backgroundColor: '#1a1a2e' },
+  inner: { flex: 1, justifyContent: 'center', paddingHorizontal: 32 },
+  title: { fontSize: 28, fontWeight: 'bold', color: '#fff', textAlign: 'center', marginBottom: 8 },
+  subtitle: { fontSize: 14, color: '#888', textAlign: 'center', marginBottom: 40 },
   input: {
-    backgroundColor: '#16213e',
-    color: '#fff',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 14,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#0f3460',
+    backgroundColor: '#16213e', color: '#fff', borderRadius: 10,
+    padding: 14, marginBottom: 14, fontSize: 16,
+    borderWidth: 1, borderColor: '#0f3460',
   },
   button: {
-    backgroundColor: '#0f3460',
-    borderRadius: 10,
-    padding: 16,
-    alignItems: 'center',
-    marginBottom: 20,
+    backgroundColor: '#0f3460', borderRadius: 10,
+    padding: 16, alignItems: 'center', marginBottom: 20,
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  link: {
-    color: '#888',
-    textAlign: 'center',
-    fontSize: 14,
-  },
-  linkBold: {
-    color: '#4fc3f7',
-    fontWeight: 'bold',
-  },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  link: { color: '#888', textAlign: 'center', fontSize: 14 },
+  linkBold: { color: '#4fc3f7', fontWeight: 'bold' },
 });
