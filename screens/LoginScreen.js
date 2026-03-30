@@ -4,7 +4,6 @@ import {
   StyleSheet, ActivityIndicator, KeyboardAvoidingView,
   Platform, Alert
 } from 'react-native';
-import client from '../api/client';
 import { useAuth } from '../context/AuthContext';
 
 export default function LoginScreen({ navigation }) {
@@ -20,11 +19,10 @@ export default function LoginScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      const res = await client.post('/api/app/login', { email, password });
-      await login(res.data.token, res.data.user_id);
+      await login(email, password);
+      // Navigation happens automatically via AuthContext session change
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || 'Could not connect to server.';
-      Alert.alert('Login Failed', msg);
+      Alert.alert('Login Failed', err.message || 'Invalid email or password.');
     } finally {
       setLoading(false);
     }
@@ -36,8 +34,7 @@ export default function LoginScreen({ navigation }) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.inner}>
-        <Text style={styles.logo}>❄️</Text>
-        <Text style={styles.title}>FrostByte</Text>
+        <Text style={styles.logo}>FrostByte</Text>
         <Text style={styles.subtitle}>Black Ice Alert System</Text>
 
         <TextInput
@@ -65,10 +62,7 @@ export default function LoginScreen({ navigation }) {
           }
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.guestButton}
-          onPress={continueAsGuest}
-        >
+        <TouchableOpacity style={styles.guestButton} onPress={continueAsGuest}>
           <Text style={styles.guestText}>Continue as Guest</Text>
         </TouchableOpacity>
 
@@ -83,74 +77,25 @@ export default function LoginScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#1a1a2e',
-  },
-  inner: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-  },
-  logo: {
-    fontSize: 64,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#fff',
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#888',
-    textAlign: 'center',
-    marginBottom: 40,
-  },
+  container: { flex: 1, backgroundColor: '#1a1a2e' },
+  inner: { flex: 1, justifyContent: 'center', paddingHorizontal: 32 },
+  logo: { fontSize: 32, fontWeight: 'bold', color: '#fff', textAlign: 'center' },
+  subtitle: { fontSize: 14, color: '#888', textAlign: 'center', marginBottom: 40 },
   input: {
-    backgroundColor: '#16213e',
-    color: '#fff',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 14,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#0f3460',
+    backgroundColor: '#16213e', color: '#fff', borderRadius: 10,
+    padding: 14, marginBottom: 14, fontSize: 16,
+    borderWidth: 1, borderColor: '#0f3460',
   },
   button: {
-    backgroundColor: '#0f3460',
-    borderRadius: 10,
-    padding: 16,
-    alignItems: 'center',
-    marginBottom: 12,
+    backgroundColor: '#0f3460', borderRadius: 10,
+    padding: 16, alignItems: 'center', marginBottom: 12,
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   guestButton: {
-    borderRadius: 10,
-    padding: 16,
-    alignItems: 'center',
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#4fc3f7',
+    borderRadius: 10, padding: 16, alignItems: 'center',
+    marginBottom: 20, borderWidth: 1, borderColor: '#4fc3f7',
   },
-  guestText: {
-    color: '#4fc3f7',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  link: {
-    color: '#888',
-    textAlign: 'center',
-    fontSize: 14,
-  },
-  linkBold: {
-    color: '#4fc3f7',
-    fontWeight: 'bold',
-  },
+  guestText: { color: '#4fc3f7', fontSize: 16, fontWeight: '600' },
+  link: { color: '#888', textAlign: 'center', fontSize: 14 },
+  linkBold: { color: '#4fc3f7', fontWeight: 'bold' },
 });
