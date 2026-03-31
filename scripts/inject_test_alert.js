@@ -12,9 +12,6 @@
  * The alert appears in the app within 30 seconds (next poll cycle).
  * Alerts are marked is_test=FALSE so they show to real users — use --clean to remove.
  *
- * Setup (one time):
- *   1. Copy scripts/.env.example to scripts/.env
- *   2. Fill in your Supabase URL and service role key
  */
 
 const https = require('https');
