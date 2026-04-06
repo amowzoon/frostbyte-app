@@ -1,17 +1,15 @@
 import axios from 'axios';
 import { supabase } from '../lib/supabase';
 
-// Public backend URL via ngrok tunnel.
-// Update this whenever ngrok restarts (free plan gives a new URL each time).
-export const BASE_URL = 'https://superprosperous-arnulfo-pebbly.ngrok-free.dev';
+// Backend URL — points to hosted backend.
+// Alerts are served from Supabase directly (Layer 1 in networkManager.js)
+// so the app works fully without needing the backend reachable.
+// Update this to your Cloudflare tunnel URL once it is set up.
+export const BASE_URL = 'http://150.136.139.169:8000';
 
 const client = axios.create({
   baseURL: BASE_URL,
   timeout: 10000,
-  headers: {
-    // Required to bypass ngrok's browser warning page
-    'ngrok-skip-browser-warning': 'true',
-  },
 });
 
 // Automatically attach the Supabase JWT to every backend request

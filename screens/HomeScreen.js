@@ -1,20 +1,24 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  ActivityIndicator, Alert, Platform
+  ActivityIndicator, Alert, Platform, TextInput,
+  FlatList, Keyboard
 } from 'react-native';
-import MapView, { Marker, Circle } from 'react-native-maps';
+import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { supabase } from '../lib/supabase';
-import { fetchAlerts, FetchSource } from '../lib/networkManager';
-import { filterAlertsByRadius, getRouteAlerts } from '../lib/routeAlert';
+import { fetchAlerts, FetchSource, subscribeToAlerts } from '../lib/networkManager';
+import { filterAlertsByRadius, getRouteAlerts, updateHeadingHistory, resetHeadingHistory } from '../lib/routeAlert';
 import { scanForFrostByteDevices } from '../lib/bleManager';
 import { useAuth } from '../context/AuthContext';
 import { MaterialIcons } from '@expo/vector-icons';
+import { searchPlaces, fetchRoute, checkRouteForIce, splitRouteSegments } from '../lib/routeNav';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const POLL_INTERVAL_MS = 30000;
 const DEFAULT_RADIUS_M = 500;
+const DEFAULT_WARN_SECONDS = 10;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -30,24 +34,45 @@ export default function HomeScreen({ navigation }) {
   const [location, setLocation] = useState(null);
   const [heading, setHeading] = useState(null);
   const [speed, setSpeed] = useState(0);
-  const [allAlerts, setAllAlerts] = useState([]);         // raw from network
-  const [nearbyAlerts, setNearbyAlerts] = useState([]);   // proximity filtered
-  const [routeAlerts, setRouteAlerts] = useState([]);     // route filtered
-  const [bleAlerts, setBleAlerts] = useState([]);         // from BLE scan
+  const [allAlerts, setAllAlerts] = useState([]);
+  const [nearbyAlerts, setNearbyAlerts] = useState([]);
+  const [routeAlerts, setRouteAlerts] = useState([]);
+  const [bleAlerts, setBleAlerts] = useState([]);
   const [alertRadius, setAlertRadius] = useState(DEFAULT_RADIUS_M);
+  const [warnSeconds, setWarnSeconds] = useState(DEFAULT_WARN_SECONDS);
   const [prefs, setPrefs] = useState({ notify_ice: true, notify_bluetooth: true, notify_route: true });
   const [fetchSource, setFetchSource] = useState(FetchSource.NONE);
   const [cacheAge, setCacheAge] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
 
+  // Destination search
+  const [destQuery, setDestQuery] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+
+  // Navigation route
+  const [routeCoords, setRouteCoords] = useState(null);
+  const [routeIceAlerts, setRouteIceAlerts] = useState([]);
+  const [routeSegments, setRouteSegments] = useState([]);
+  const [routeInfo, setRouteInfo] = useState(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+
   const mapRef = useRef(null);
   const pollTimer = useRef(null);
   const locationSub = useRef(null);
   const stopBleScan = useRef(null);
+  const realtimeSub = useRef(null);
+  const searchDebounce = useRef(null);
 
-  // Load user preferences from Supabase
+  // Load preferences
   useEffect(() => {
+    // Load warn seconds from AsyncStorage (set by SettingsScreen slider)
+    AsyncStorage.getItem('warn_seconds').then(val => {
+      if (val) setWarnSeconds(parseInt(val));
+    });
+
     if (!isGuest && userId) {
       supabase
         .from('user_preferences')
@@ -65,43 +90,47 @@ export default function HomeScreen({ navigation }) {
     }
   }, [userId, isGuest]);
 
-  // Re-run client-side filtering whenever alerts, location, heading, or radius changes
+  // Reload warn seconds when returning from Settings
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      AsyncStorage.getItem('warn_seconds').then(val => {
+        if (val) setWarnSeconds(parseInt(val));
+      });
+    });
+    return unsubscribe;
+  }, [navigation]);
+
   useEffect(() => {
     if (!location || allAlerts.length === 0) return;
 
-    // Proximity filter — exact Haversine distance, not bounding box
     const nearby = filterAlertsByRadius(
-      allAlerts,
-      location.latitude,
-      location.longitude,
-      alertRadius,
-      0  // include all confidence levels, let the map colors communicate risk
+      allAlerts, location.latitude, location.longitude, alertRadius, 0
     );
     setNearbyAlerts(nearby);
 
-    // Route-based filter — project path 60 seconds ahead
     const onRoute = getRouteAlerts(
-      location.latitude,
-      location.longitude,
-      heading,
-      speed,
-      allAlerts,
-      100,  // 100m alert zone radius around each ice detection
-      60    // look 60 seconds ahead
+      location.latitude, location.longitude, speed, allAlerts, warnSeconds
     );
     setRouteAlerts(onRoute);
 
-    // Route warning notification — only if user enabled route alerts
-    if (prefs.notify_route && onRoute.length > 0 && onRoute[0].secondsUntilReach <= 15) {
+    if (prefs.notify_route && onRoute.length > 0) {
       Notifications.scheduleNotificationAsync({
         content: {
           title: 'Ice ahead on your route',
-          body: `Black ice detected approximately ${onRoute[0].secondsUntilReach} seconds ahead. Slow down.`,
+          body: onRoute[0].etaLabel === 'now'
+            ? 'Entering an ice zone — slow down immediately.'
+            : `Black ice ${onRoute[0].etaLabel} ahead on your current route. Slow down.`,
         },
         trigger: null,
       });
     }
-  }, [allAlerts, location, heading, speed, alertRadius, prefs]);
+
+    if (routeCoords) {
+      const iceOnRoute = checkRouteForIce(routeCoords, allAlerts);
+      setRouteIceAlerts(iceOnRoute);
+      setRouteSegments(splitRouteSegments(routeCoords, iceOnRoute));
+    }
+  }, [allAlerts, location, heading, speed, alertRadius, prefs, routeCoords, warnSeconds]);
 
   useEffect(() => {
     setupPermissions();
@@ -109,6 +138,9 @@ export default function HomeScreen({ navigation }) {
       if (pollTimer.current) clearInterval(pollTimer.current);
       if (locationSub.current) locationSub.current.remove();
       if (stopBleScan.current) stopBleScan.current();
+      if (searchDebounce.current) clearTimeout(searchDebounce.current);
+      if (realtimeSub.current) realtimeSub.current.unsubscribe();
+      resetHeadingHistory();
     };
   }, []);
 
@@ -121,11 +153,9 @@ export default function HomeScreen({ navigation }) {
         return;
       }
 
-      // Non-blocking notification permission
       Notifications.requestPermissionsAsync().then(async ({ status }) => {
         if (status === 'granted' && !isGuest) {
           try {
-            // Push notifications require a development build — skip in Expo Go
             const pushToken = await Notifications.getExpoPushTokenAsync({
               projectId: 'frostbyte-alert-app',
             }).catch(() => null);
@@ -134,21 +164,14 @@ export default function HomeScreen({ navigation }) {
                 .from('user_preferences')
                 .upsert({ user_id: userId, push_token: pushToken.data }, { onConflict: 'user_id' });
             }
-          } catch (e) {
-            // Non-fatal — app works without push tokens in Expo Go
-          }
+          } catch (e) {}
         }
       });
 
-      // Get initial location with timeout
       let coords = null;
       try {
-        const locPromise = Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        const timeout = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('timeout')), 8000)
-        );
+        const locPromise = Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000));
         const loc = await Promise.race([locPromise, timeout]);
         coords = loc.coords;
       } catch (e) {
@@ -158,34 +181,36 @@ export default function HomeScreen({ navigation }) {
 
       setLocation(coords);
       setLoading(false);
+      if (coords) doFetch(coords);
 
-      if (coords) {
-        doFetch(coords);
-      }
-
-      // Watch location continuously for heading and speed (used for route alerting)
       locationSub.current = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.BestForNavigation,
-          timeInterval: 2000,
-          distanceInterval: 5,
-        },
+        { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 2000, distanceInterval: 5 },
         (loc) => {
-          setLocation(loc.coords);
-          setHeading(loc.coords.heading);
-          setSpeed(loc.coords.speed || 0);
+          const c = loc.coords;
+          setLocation(c);
+          setHeading(c.heading);
+          setSpeed(c.speed || 0);
+          updateHeadingHistory(c.latitude, c.longitude, c.speed || 0, Date.now());
         }
       );
 
-      // Poll backend/Pi every 30 seconds
       pollTimer.current = setInterval(() => {
         Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
           .then(loc => doFetch(loc.coords))
           .catch(() => {});
       }, POLL_INTERVAL_MS);
 
-      // Start BLE scan for nearby Pi devices
       startBleScan();
+
+      // Real-time subscription — instant updates when alerts change in Supabase
+      realtimeSub.current = subscribeToAlerts(
+        (alert) => setAllAlerts(prev => {
+          if (prev.find(a => a.id === alert.id)) return prev;
+          return [...prev, alert];
+        }),
+        (alert) => setAllAlerts(prev => prev.map(a => a.id === alert.id ? alert : a)),
+        (alert) => setAllAlerts(prev => prev.filter(a => a.id !== alert.id))
+      );
 
     } catch (err) {
       console.error('setupPermissions error:', err.message);
@@ -215,6 +240,70 @@ export default function HomeScreen({ navigation }) {
       });
     }, 15000);
   };
+
+  // ---------------------------------------------------------------------------
+  // Search with debounced autocomplete
+  // ---------------------------------------------------------------------------
+
+  const handleSearchChange = (text) => {
+    setDestQuery(text);
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    if (text.length < 3) { setSuggestions([]); return; }
+    setSuggestionsLoading(true);
+    searchDebounce.current = setTimeout(async () => {
+      const results = await searchPlaces(text, location?.latitude, location?.longitude);
+      setSuggestions(results);
+      setSuggestionsLoading(false);
+    }, 600);
+  };
+
+  const handleSelectSuggestion = async (place) => {
+    Keyboard.dismiss();
+    setDestQuery(place.shortName);
+    setSuggestions([]);
+    setSearchFocused(false);
+    if (!location) { Alert.alert('No location', 'Waiting for GPS fix.'); return; }
+
+    setRouteLoading(true);
+    const route = await fetchRoute(location, { lat: place.lat, lon: place.lon });
+    setRouteLoading(false);
+
+    if (!route) {
+      Alert.alert('Route error', 'Could not get directions. Check your ORS API key in routeNav.js.');
+      return;
+    }
+
+    const iceOnRoute = checkRouteForIce(route.coordinates, allAlerts);
+    setRouteCoords(route.coordinates);
+    setRouteIceAlerts(iceOnRoute);
+    setRouteSegments(splitRouteSegments(route.coordinates, iceOnRoute));
+    setRouteInfo({ distanceKm: route.distanceKm, durationMin: route.durationMin });
+
+    if (mapRef.current && route.coordinates.length > 1) {
+      mapRef.current.fitToCoordinates(route.coordinates, {
+        edgePadding: { top: 160, right: 40, bottom: 200, left: 40 },
+        animated: true,
+      });
+    }
+
+    if (iceOnRoute.length > 0) {
+      Alert.alert(
+        '⚠️ Ice on your route',
+        `${iceOnRoute.length} ice alert${iceOnRoute.length > 1 ? 's' : ''} detected along your route.`
+      );
+    }
+  };
+
+  const clearRoute = () => {
+    setRouteCoords(null);
+    setRouteIceAlerts([]);
+    setRouteSegments([]);
+    setRouteInfo(null);
+    setDestQuery('');
+    setSuggestions([]);
+  };
+
+  // ---------------------------------------------------------------------------
 
   const getAlertColor = (confidence) => {
     if (confidence > 0.75) return '#ff3b30';
@@ -255,17 +344,10 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
-  // Combine alert sources, filtered by user's alert type preferences
   const allMapAlerts = [
     ...(prefs.notify_ice ? nearbyAlerts : []),
-    ...(prefs.notify_bluetooth ? bleAlerts.map(b => ({
-      ...b,
-      id: `ble-${b.deviceId}`,
-      latitude: b.latitude,
-      longitude: b.longitude,
-    })) : []),
+    ...(prefs.notify_bluetooth ? bleAlerts.map(b => ({ ...b, id: `ble-${b.deviceId}` })) : []),
   ];
-
   const visibleRouteAlerts = prefs.notify_route ? routeAlerts : [];
 
   if (loading) {
@@ -282,20 +364,70 @@ export default function HomeScreen({ navigation }) {
 
       {/* Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>FrostByte</Text>
-          {isGuest && <Text style={styles.guestBadge}>Guest Mode</Text>}
+        <View style={styles.headerTop}>
+          <View>
+            <Text style={styles.headerTitle}>FrostByte</Text>
+            {isGuest && <Text style={styles.guestBadge}>Guest Mode</Text>}
+          </View>
+          <View style={styles.headerRight}>
+            {!isGuest && (
+              <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.headerBtn}>
+                <Text style={styles.headerBtnText}>Settings</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={logout} style={styles.headerBtn}>
+              <Text style={styles.headerBtnText}>{isGuest ? 'Sign In' : 'Sign Out'}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-        <View style={styles.headerRight}>
-          {!isGuest && (
-            <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.headerBtn}>
-              <Text style={styles.headerBtnText}>Settings</Text>
+
+        {/* Persistent search bar */}
+        <View style={styles.searchBar}>
+          <MaterialIcons name="search" size={18} color="#666" style={{ marginRight: 6 }} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search destination..."
+            placeholderTextColor="#555"
+            value={destQuery}
+            onChangeText={handleSearchChange}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
+            returnKeyType="search"
+          />
+          {routeLoading && <ActivityIndicator size="small" color="#4fc3f7" style={{ marginRight: 6 }} />}
+          {destQuery.length > 0 && (
+            <TouchableOpacity onPress={clearRoute} style={styles.searchClear}>
+              <MaterialIcons name="close" size={16} color="#888" />
             </TouchableOpacity>
           )}
-          <TouchableOpacity onPress={logout} style={styles.headerBtn}>
-            <Text style={styles.headerBtnText}>{isGuest ? 'Sign In' : 'Sign Out'}</Text>
-          </TouchableOpacity>
         </View>
+
+        {/* Autocomplete suggestions */}
+        {searchFocused && (suggestions.length > 0 || suggestionsLoading) && (
+          <View style={styles.suggestions}>
+            {suggestionsLoading && suggestions.length === 0 && (
+              <View style={styles.suggestionItem}>
+                <ActivityIndicator size="small" color="#4fc3f7" />
+              </View>
+            )}
+            {suggestions.map((place, i) => (
+              <TouchableOpacity
+                key={i}
+                style={[styles.suggestionItem, i < suggestions.length - 1 && styles.suggestionBorder]}
+                onPress={() => handleSelectSuggestion(place)}
+              >
+                <MaterialIcons name="place" size={16} color="#4fc3f7" style={{ marginRight: 8 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.suggestionMain} numberOfLines={1}>{place.shortName}</Text>
+                  <Text style={styles.suggestionSub} numberOfLines={1}>{place.displayName}</Text>
+                </View>
+                {place.distLabel && (
+                  <Text style={styles.suggestionDist}>{place.distLabel}</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
       </View>
 
       {/* Status banner */}
@@ -311,17 +443,30 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.sourceLabel}>{getSourceLabel()}</Text>
         </View>
 
-        {/* Route alert warning */}
         {visibleRouteAlerts.length > 0 && (
           <Text style={styles.routeWarning}>
-            Ice on your route — {visibleRouteAlerts[0].secondsUntilReach}s ahead
+            Ice on your route — {visibleRouteAlerts[0].etaLabel === 'now'
+              ? 'entering ice zone now'
+              : `${visibleRouteAlerts[0].etaLabel} ahead`}
           </Text>
         )}
 
+        {routeInfo && (
+          <View style={styles.routeInfoRow}>
+            <Text style={styles.routeInfoText}>
+              📍 {routeInfo.distanceKm}km · {routeInfo.durationMin}min
+              {routeIceAlerts.length > 0
+                ? `  ·  ⚠️ ${routeIceAlerts.length} ice zone${routeIceAlerts.length > 1 ? 's' : ''}`
+                : '  ·  ✅ Clear'}
+            </Text>
+            <TouchableOpacity onPress={clearRoute}>
+              <Text style={styles.clearRoute}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {lastUpdated && (
-          <Text style={styles.bannerSub}>
-            Updated {lastUpdated.toLocaleTimeString()}
-          </Text>
+          <Text style={styles.bannerSub}>Updated {lastUpdated.toLocaleTimeString()}</Text>
         )}
       </View>
 
@@ -343,7 +488,6 @@ export default function HomeScreen({ navigation }) {
         showsUserLocation
         showsMyLocationButton={false}
       >
-        {/* Nearby alerts from backend or Pi direct */}
         {allMapAlerts.map(alert => (
           <React.Fragment key={alert.id}>
             <Circle
@@ -362,7 +506,6 @@ export default function HomeScreen({ navigation }) {
           </React.Fragment>
         ))}
 
-        {/* Route alert zones — shown as larger circles in a distinct color */}
         {visibleRouteAlerts.map(alert => (
           <Circle
             key={`route-${alert.id}`}
@@ -373,19 +516,33 @@ export default function HomeScreen({ navigation }) {
             strokeWidth={3}
           />
         ))}
+
+        {routeSegments.map((seg, i) => (
+          <Polyline
+            key={`nav-${i}`}
+            coordinates={seg.points}
+            strokeColor={seg.isDanger ? '#ff3b30' : '#4fc3f7'}
+            strokeWidth={seg.isDanger ? 5 : 3}
+          />
+        ))}
+
+        {routeCoords && routeCoords.length > 0 && (
+          <Marker
+            coordinate={routeCoords[routeCoords.length - 1]}
+            title="Destination"
+            pinColor="#4fc3f7"
+          />
+        )}
       </MapView>
 
-      {/* Center on user button */}
-      <TouchableOpacity style={styles.iconButton} onPress={centerOnUser} accessibilityLabel="Center map on my location">
+      <TouchableOpacity style={styles.iconButton} onPress={centerOnUser}>
         <MaterialIcons name="my-location" size={22} color="#fff" />
       </TouchableOpacity>
 
-      {/* Bluetooth scan button */}
-      <TouchableOpacity style={[styles.iconButton, styles.bleIconButton]} onPress={startBleScan} accessibilityLabel="Scan for nearby FrostByte devices via Bluetooth">
+      <TouchableOpacity style={[styles.iconButton, styles.bleIconButton]} onPress={startBleScan}>
         <MaterialIcons name="bluetooth-searching" size={22} color="#4fc3f7" />
       </TouchableOpacity>
 
-      {/* Legend */}
       <View style={styles.legend}>
         <Text style={styles.legendTitle}>Risk Level</Text>
         <View style={styles.legendRow}>
@@ -394,7 +551,7 @@ export default function HomeScreen({ navigation }) {
         </View>
         <View style={styles.legendRow}>
           <View style={[styles.legendDot, { backgroundColor: '#ff9500' }]} />
-          <Text style={styles.legendText}>Medium 50 to 75%</Text>
+          <Text style={styles.legendText}>Medium 50–75%</Text>
         </View>
         <View style={styles.legendRow}>
           <View style={[styles.legendDot, { backgroundColor: '#ffcc00' }]} />
@@ -404,11 +561,17 @@ export default function HomeScreen({ navigation }) {
           <View style={[styles.legendDot, { backgroundColor: '#4fc3f7' }]} />
           <Text style={styles.legendText}>Bluetooth</Text>
         </View>
-        {visibleRouteAlerts.length > 0 && (
-          <View style={styles.legendRow}>
-            <View style={[styles.legendDot, { backgroundColor: '#ff3b30', borderWidth: 2, borderColor: '#fff' }]} />
-            <Text style={styles.legendText}>On your route</Text>
-          </View>
+        {routeCoords && (
+          <>
+            <View style={styles.legendRow}>
+              <View style={[styles.legendDot, { backgroundColor: '#4fc3f7', borderRadius: 0 }]} />
+              <Text style={styles.legendText}>Route (clear)</Text>
+            </View>
+            <View style={styles.legendRow}>
+              <View style={[styles.legendDot, { backgroundColor: '#ff3b30', borderRadius: 0 }]} />
+              <Text style={styles.legendText}>Route (ice)</Text>
+            </View>
+          </>
         )}
       </View>
     </View>
@@ -420,25 +583,72 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'center', alignItems: 'center' },
   loadingText: { color: '#888', marginTop: 12, fontSize: 14 },
   header: {
+    backgroundColor: '#1a1a2e',
+    paddingTop: Platform.OS === 'ios' ? 52 : 40,
+    paddingBottom: 8,
+    zIndex: 100,
+  },
+  headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 52 : 40,
-    paddingBottom: 12,
-    backgroundColor: '#1a1a2e',
-    zIndex: 10,
+    marginBottom: 10,
   },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
   guestBadge: { color: '#4fc3f7', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   headerBtn: { paddingHorizontal: 8, paddingVertical: 4 },
   headerBtnText: { color: '#4fc3f7', fontSize: 14 },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0f1b2d',
+    marginHorizontal: 16,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#0f3460',
+  },
+  searchInput: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 14,
+    paddingVertical: 0,
+  },
+  searchClear: { padding: 4 },
+  suggestions: {
+    marginHorizontal: 16,
+    marginTop: 4,
+    backgroundColor: '#0f1b2d',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#0f3460',
+    overflow: 'hidden',
+    zIndex: 200,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  suggestionBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#1a2a3d',
+  },
+  suggestionMain: { color: '#fff', fontSize: 13, fontWeight: '500' },
+  suggestionSub: { color: '#666', fontSize: 11, marginTop: 1 },
+  suggestionDist: { color: '#4fc3f7', fontSize: 11, marginLeft: 8, flexShrink: 0 },
   banner: { paddingVertical: 10, paddingHorizontal: 16 },
   bannerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   bannerText: { color: '#fff', fontSize: 13, fontWeight: '600' },
   sourceLabel: { color: '#aaa', fontSize: 11 },
   routeWarning: { color: '#ff3b30', fontSize: 13, fontWeight: 'bold', marginTop: 4 },
+  routeInfoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
+  routeInfoText: { color: '#ccc', fontSize: 11, flex: 1 },
+  clearRoute: { color: '#aaa', fontSize: 14, paddingLeft: 8 },
   bannerSub: { color: '#888', fontSize: 11, marginTop: 2 },
   map: { flex: 1 },
   iconButton: {

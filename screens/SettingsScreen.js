@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  ActivityIndicator, Alert, Switch, ScrollView
+  ActivityIndicator, Alert, Switch, ScrollView, Platform
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Slider from '@react-native-community/slider';
 import { supabase } from '../lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { registerBackgroundAlertTask } from '../lib/backgroundAlertTask';
 import { useAuth } from '../context/AuthContext';
+import { MaterialIcons } from '@expo/vector-icons';
 
 const DEFAULT_PREFS = {
   alert_radius_m: 500,
@@ -14,11 +18,15 @@ const DEFAULT_PREFS = {
   notify_route: true,
 };
 
-export default function SettingsScreen() {
+const DEFAULT_WARN_SECONDS = 10;
+const snapToStep = (v) => Math.round(v / 5) * 5;
+
+export default function SettingsScreen({ navigation }) {
   const { logout, email, userId } = useAuth();
-  const [loading, setLoading]   = useState(true);
-  const [saving, setSaving]     = useState(false);
-  const [prefs, setPrefs]       = useState(DEFAULT_PREFS);
+  const [loading, setLoading]       = useState(true);
+  const [saving, setSaving]         = useState(false);
+  const [prefs, setPrefs]           = useState(DEFAULT_PREFS);
+  const [warnSeconds, setWarnSeconds] = useState(DEFAULT_WARN_SECONDS);
 
   useEffect(() => { loadSettings(); }, []);
 
@@ -39,6 +47,12 @@ export default function SettingsScreen() {
           notify_route:     data.notify_route     ?? DEFAULT_PREFS.notify_route,
         });
       }
+
+      // Load warn seconds from local storage
+      const stored = await AsyncStorage.getItem('warn_seconds');
+      if (stored) setWarnSeconds(snapToStep(parseInt(stored)));
+      else setWarnSeconds(DEFAULT_WARN_SECONDS);
+
     } catch (err) {
       console.warn('Failed to load settings:', err.message);
     } finally {
@@ -53,6 +67,12 @@ export default function SettingsScreen() {
         .from('user_preferences')
         .upsert({ user_id: userId, ...prefs, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
       if (error) throw error;
+
+      // Save warn_seconds locally (not in Supabase — it's a local UI preference)
+      await AsyncStorage.setItem('warn_seconds', warnSeconds.toString());
+      await AsyncStorage.setItem('user_preferences_cache', JSON.stringify(prefs));
+      await registerBackgroundAlertTask();
+
       Alert.alert('Saved', 'Your settings have been updated.');
     } catch (err) {
       Alert.alert('Error', 'Failed to save settings: ' + err.message);
@@ -65,14 +85,22 @@ export default function SettingsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <SafeAreaView style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#4fc3f7" />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <MaterialIcons name="arrow-back" size={22} color="#4fc3f7" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Settings</Text>
+        <View style={{ width: 60 }} />
+      </View>
+      <ScrollView contentContainerStyle={styles.content}>
 
       {/* Account */}
       <View style={styles.section}>
@@ -114,6 +142,33 @@ export default function SettingsScreen() {
         </View>
       </View>
 
+      {/* Warning threshold */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Route Warning Threshold</Text>
+        <View style={styles.radiusRow}>
+          <Text style={styles.rowLabel}>Warn me</Text>
+          <Text style={styles.radiusValue}>{warnSeconds}s before ice</Text>
+        </View>
+        <Text style={styles.hint}>
+          How far ahead the app warns you when your route is heading toward ice
+        </Text>
+        <Slider
+          style={styles.slider}
+          minimumValue={5}
+          maximumValue={30}
+          step={5}
+          value={warnSeconds}
+          onValueChange={v => setWarnSeconds(snapToStep(v))}
+          minimumTrackTintColor="#4fc3f7"
+          maximumTrackTintColor="#333"
+          thumbTintColor="#4fc3f7"
+        />
+        <View style={styles.sliderLabels}>
+          <Text style={styles.sliderLabel}>5s</Text>
+          <Text style={styles.sliderLabel}>30s</Text>
+        </View>
+      </View>
+
       {/* Alert types */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Alert Types</Text>
@@ -129,7 +184,7 @@ export default function SettingsScreen() {
             value={prefs.notify_ice}
             onValueChange={v => setPref('notify_ice', v)}
             trackColor={{ false: '#333', true: '#0f3460' }}
-            thumbColor={prefs.notify_ice ? '#4fc3f7' : '#666'}
+            thumbColor="#fff"
           />
         </View>
 
@@ -139,14 +194,14 @@ export default function SettingsScreen() {
           <View style={styles.toggleInfo}>
             <Text style={styles.toggleLabel}>Route-Based Warnings</Text>
             <Text style={styles.toggleDesc}>
-              Alert when your current heading and speed will bring you to an ice zone within 60 seconds
+              Alert when your heading will bring you to an ice zone within your chosen threshold
             </Text>
           </View>
           <Switch
             value={prefs.notify_route}
             onValueChange={v => setPref('notify_route', v)}
             trackColor={{ false: '#333', true: '#0f3460' }}
-            thumbColor={prefs.notify_route ? '#4fc3f7' : '#666'}
+            thumbColor="#fff"
           />
         </View>
 
@@ -163,7 +218,7 @@ export default function SettingsScreen() {
             value={prefs.notify_bluetooth}
             onValueChange={v => setPref('notify_bluetooth', v)}
             trackColor={{ false: '#333', true: '#0f3460' }}
-            thumbColor={prefs.notify_bluetooth ? '#4fc3f7' : '#666'}
+            thumbColor="#fff"
           />
         </View>
       </View>
@@ -194,32 +249,37 @@ export default function SettingsScreen() {
       </TouchableOpacity>
 
     </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container:       { flex: 1, backgroundColor: '#1a1a2e' },
-  content:         { padding: 20, paddingBottom: 40 },
-  loadingContainer:{ flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'center', alignItems: 'center' },
-  section:         { backgroundColor: '#16213e', borderRadius: 12, padding: 16, marginBottom: 16 },
-  sectionTitle:    { color: '#4fc3f7', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 },
-  row:             { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  rowLabel:        { color: '#ccc', fontSize: 15 },
-  rowValue:        { color: '#888', fontSize: 13, flexShrink: 1, textAlign: 'right', marginLeft: 8 },
-  radiusRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  radiusValue:     { color: '#4fc3f7', fontSize: 16, fontWeight: 'bold' },
-  hint:            { color: '#666', fontSize: 12, marginBottom: 8 },
-  slider:          { width: '100%', height: 40 },
-  sliderLabels:    { flexDirection: 'row', justifyContent: 'space-between' },
-  sliderLabel:     { color: '#666', fontSize: 11 },
-  toggleRow:       { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 4 },
-  toggleInfo:      { flex: 1, marginRight: 12 },
-  toggleLabel:     { color: '#fff', fontSize: 15, marginBottom: 3 },
-  toggleDesc:      { color: '#888', fontSize: 12, lineHeight: 17 },
-  divider:         { height: 1, backgroundColor: '#0f3460', marginVertical: 12 },
-  privacyText:     { color: '#888', fontSize: 13, lineHeight: 20 },
-  saveButton:      { backgroundColor: '#0f3460', borderRadius: 10, padding: 16, alignItems: 'center', marginBottom: 12 },
-  saveButtonText:  { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  logoutButton:    { borderRadius: 10, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: '#ff3b30' },
-  logoutText:      { color: '#ff3b30', fontSize: 16, fontWeight: '600' },
+  container:        { flex: 1, backgroundColor: '#1a1a2e' },
+  header:           { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#0f3460' },
+  headerTitle:      { color: '#fff', fontSize: 17, fontWeight: 'bold' },
+  backBtn:          { paddingVertical: 4, paddingRight: 12, width: 60 },
+
+  content:          { padding: 20, paddingBottom: 40 },
+  loadingContainer: { flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'center', alignItems: 'center' },
+  section:          { backgroundColor: '#16213e', borderRadius: 12, padding: 16, marginBottom: 16 },
+  sectionTitle:     { color: '#4fc3f7', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 },
+  row:              { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  rowLabel:         { color: '#ccc', fontSize: 15 },
+  rowValue:         { color: '#888', fontSize: 13, flexShrink: 1, textAlign: 'right', marginLeft: 8 },
+  radiusRow:        { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  radiusValue:      { color: '#4fc3f7', fontSize: 16, fontWeight: 'bold' },
+  hint:             { color: '#666', fontSize: 12, marginBottom: 8 },
+  slider:           { width: '100%', height: 40 },
+  sliderLabels:     { flexDirection: 'row', justifyContent: 'space-between' },
+  sliderLabel:      { color: '#666', fontSize: 11 },
+  toggleRow:        { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 4 },
+  toggleInfo:       { flex: 1, marginRight: 12 },
+  toggleLabel:      { color: '#fff', fontSize: 15, marginBottom: 3 },
+  toggleDesc:       { color: '#888', fontSize: 12, lineHeight: 17 },
+  divider:          { height: 1, backgroundColor: '#0f3460', marginVertical: 12 },
+  privacyText:      { color: '#888', fontSize: 13, lineHeight: 20 },
+  saveButton:       { backgroundColor: '#0f3460', borderRadius: 10, padding: 16, alignItems: 'center', marginBottom: 12 },
+  saveButtonText:   { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  logoutButton:     { borderRadius: 10, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: '#ff3b30' },
+  logoutText:       { color: '#ff3b30', fontSize: 16, fontWeight: '600' },
 });
