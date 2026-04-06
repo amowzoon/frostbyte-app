@@ -14,7 +14,18 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.frostbyte.alertapp"
+      "bundleIdentifier": "com.frostbyte.alertapp",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "FrostByte uses your location to show nearby ice alerts on the map.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "FrostByte uses your location in the background to warn you when you are approaching ice, even when the app is closed.",
+        "NSLocationAlwaysUsageDescription": "FrostByte uses your location in the background to warn you when you are approaching ice, even when the app is closed.",
+        "UIBackgroundModes": [
+          "location",
+          "fetch",
+          "location",
+          "fetch"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -22,13 +33,38 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.frostbyte.alertapp"
+      "package": "com.frostbyte.alertapp",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-secure-store",
+      "expo-task-manager",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "FrostByte uses your location in the background to warn you when you are approaching ice, even when the app is closed.",
+          "locationAlwaysPermission": "FrostByte uses your location in the background to warn you when you are approaching ice.",
+          "locationWhenInUsePermission": "FrostByte uses your location to show nearby ice alerts."
+        }
+      ],
       [
         "expo-notifications",
         {
@@ -41,6 +77,12 @@
       "eas": {
         "projectId": "bb7dd623-b3c2-41e9-9d58-17867f4b76bc"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/bb7dd623-b3c2-41e9-9d58-17867f4b76bc"
     }
   }
 }

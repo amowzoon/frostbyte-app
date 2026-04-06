@@ -1,10 +1,9 @@
 import axios from 'axios';
 import { supabase } from '../lib/supabase';
 
-// Backend URL — points to hosted backend.
+// Backend URL points to hosted backend.
 // Alerts are served from Supabase directly (Layer 1 in networkManager.js)
 // so the app works fully without needing the backend reachable.
-// Update this to your Cloudflare tunnel URL once it is set up.
 export const BASE_URL = 'http://150.136.139.169:8000';
 
 const client = axios.create({
