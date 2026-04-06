@@ -1,38 +1,41 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
-import { StatusBar } from 'expo-status-bar';
-
+import { AuthProvider, useAuth } from './context/AuthContext';
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
 import HomeScreen from './screens/HomeScreen';
 import SettingsScreen from './screens/SettingsScreen';
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { registerBackgroundAlertTask } from './lib/backgroundAlertTask';
 
 const Stack = createStackNavigator();
 
-function Navigation() {
-  const { isLoggedIn } = useAuth();
+function AppNavigator() {
+  const { isLoggedIn, isGuest } = useAuth();
+
+  useEffect(() => {
+    // Register background task once user is in the app
+    if (isLoggedIn || isGuest) {
+      registerBackgroundAlertTask().then(success => {
+        if (success) {
+          console.log('Background alert task registered');
+        }
+      });
+    }
+  }, [isLoggedIn, isGuest]);
 
   return (
     <NavigationContainer>
-      <StatusBar style="light" />
-      <Stack.Navigator
-        screenOptions={{
-          headerStyle: { backgroundColor: '#1a1a2e' },
-          headerTintColor: '#fff',
-          headerTitleStyle: { fontWeight: 'bold' },
-        }}
-      >
-        {isLoggedIn ? (
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {isLoggedIn || isGuest ? (
           <>
-            <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
+            <Stack.Screen name="Home" component={HomeScreen} />
+            <Stack.Screen name="Settings" component={SettingsScreen} />
           </>
         ) : (
           <>
-            <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="Register" component={RegisterScreen} options={{ title: 'Create Account' }} />
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="Register" component={RegisterScreen} />
           </>
         )}
       </Stack.Navigator>
@@ -43,7 +46,7 @@ function Navigation() {
 export default function App() {
   return (
     <AuthProvider>
-      <Navigation />
+      <AppNavigator />
     </AuthProvider>
   );
 }
