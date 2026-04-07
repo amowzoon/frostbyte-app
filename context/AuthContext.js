@@ -1,65 +1,64 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from '../lib/supabase';
+import { BASE_URL } from '../api/client';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);   // Supabase session object
-  const [user, setUser] = useState(null);          // Supabase user object
+  const [token, setToken]     = useState(null);
+  const [userId, setUserId]   = useState(null);
+  const [email, setEmail]     = useState(null);
   const [isGuest, setIsGuest] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // On mount: get current session from SecureStore (if any)
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-    });
-
-    // Restore guest mode flag
-    AsyncStorage.getItem('is_guest').then(val => {
-      if (val === 'true') setIsGuest(true);
+    Promise.all([
+      AsyncStorage.getItem('auth_token'),
+      AsyncStorage.getItem('auth_user_id'),
+      AsyncStorage.getItem('auth_email'),
+      AsyncStorage.getItem('is_guest'),
+    ]).then(([t, uid, em, guest]) => {
+      if (t) { setToken(t); setUserId(uid); setEmail(em); }
+      if (guest === 'true') setIsGuest(true);
       setLoading(false);
     });
-
-    // Listen for auth state changes (login, logout, token refresh)
-    // Fires automatically when Supabase refreshes the token in the background
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        if (session) setIsGuest(false);
-      }
-    );
-
-    // Unsubscribe when component unmounts
-    return () => subscription.unsubscribe();
   }, []);
 
-  const login = async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
+  const login = async (emailInput, password) => {
+    const res = await fetch(`${BASE_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: emailInput, password }),
     });
-    if (error) throw error;
-    // Session is automatically persisted to SecureStore by the Supabase client
-    await AsyncStorage.removeItem('is_guest');
-    setIsGuest(false);
-    return data;
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Login failed');
+    }
+    await _saveSession(await res.json());
   };
 
-  const register = async (email, password) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
+  const register = async (emailInput, password) => {
+    const res = await fetch(`${BASE_URL}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: emailInput, password }),
     });
-    if (error) throw error;
-    // Supabase may require email confirmation depending on project settings
-    // Session is set automatically if email confirmation is disabled
-    await AsyncStorage.removeItem('is_guest');
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Registration failed');
+    }
+    await _saveSession(await res.json());
+  };
+
+  const _saveSession = async (data) => {
+    setToken(data.token); setUserId(data.user_id); setEmail(data.email);
     setIsGuest(false);
-    return data;
+    await AsyncStorage.multiSet([
+      ['auth_token',   data.token],
+      ['auth_user_id', data.user_id],
+      ['auth_email',   data.email],
+    ]);
+    await AsyncStorage.removeItem('is_guest');
   };
 
   const continueAsGuest = async () => {
@@ -68,38 +67,18 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
-    // signOut clears the session from SecureStore automatically
-    setIsGuest(false);
-    await AsyncStorage.removeItem('is_guest');
+    setToken(null); setUserId(null); setEmail(null); setIsGuest(false);
+    await AsyncStorage.multiRemove(['auth_token', 'auth_user_id', 'auth_email', 'is_guest']);
   };
-
-  // The JWT access token for authenticated API requests to your backend
-  // This is a Supabase-issued JWT, valid for 1 hour, auto-refreshed
-  const accessToken = session?.access_token ?? null;
-
-  // User ID from Supabase — a UUID
-  const userId = user?.id ?? null;
-
-  // User email
-  const email = user?.email ?? null;
-
-  const isLoggedIn = !!session || isGuest;
 
   return (
     <AuthContext.Provider value={{
-      session,
-      user,
-      userId,
-      email,
-      accessToken,
+      token, userId, email,
+      accessToken: token,
       isGuest,
-      isLoggedIn,
+      isLoggedIn: !!token || isGuest,
       loading,
-      login,
-      register,
-      continueAsGuest,
-      logout,
+      login, register, continueAsGuest, logout,
     }}>
       {!loading && children}
     </AuthContext.Provider>

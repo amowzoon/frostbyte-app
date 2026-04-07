@@ -1,21 +1,21 @@
 import axios from 'axios';
-import { supabase } from '../lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Backend URL points to hosted backend.
-// Alerts are served from Supabase directly (Layer 1 in networkManager.js)
-// so the app works fully without needing the backend reachable.
-export const BASE_URL = 'http://150.136.139.169:8000';
+// Tunnel to Linux machine for dev.
+// On same local network as Pi, swap to: http://10.0.0.176:8000
+//export const BASE_URL = 'http://localhost:8080'; // use this line
+export const BASE_URL = 'http://localhost:8000'; // testing, comment out
 
 const client = axios.create({
   baseURL: BASE_URL,
   timeout: 10000,
 });
 
-// Automatically attach the Supabase JWT to every backend request
+// Attach JWT from AsyncStorage to every request
 client.interceptors.request.use(async (config) => {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.access_token) {
-    config.headers.Authorization = `Bearer ${session.access_token}`;
+  const token = await AsyncStorage.getItem('auth_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
 });
