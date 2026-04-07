@@ -1,10 +1,12 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 
-// Tunnel to Linux machine for dev.
-// On same local network as Pi, swap to: http://10.0.0.176:8000
-//export const BASE_URL = 'http://localhost:8080'; // use this line
-export const BASE_URL = 'http://localhost:8000'; // testing, comment out
+// Set via BACKEND_URL env var at eas update time.
+// Default: local network IP for testing against local Docker stack.
+// Linux machine (tunnel): BACKEND_URL=http://localhost:8080 eas update
+// Linux machine (same LAN): BACKEND_URL=http://<linux-ip>:<port> eas update
+export const BASE_URL = Constants.expoConfig.extra.backendUrl;
 
 const client = axios.create({
   baseURL: BASE_URL,
