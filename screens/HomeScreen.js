@@ -7,8 +7,8 @@ import {
 import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
-import { supabase } from '../lib/supabase';
-import { fetchAlerts, FetchSource, subscribeToAlerts } from '../lib/networkManager';
+import { fetchAlerts, FetchSource } from '../lib/networkManager';
+import client from '../api/client';
 import { filterAlertsByRadius, getRouteAlerts, updateHeadingHistory, resetHeadingHistory } from '../lib/routeAlert';
 import { scanForFrostByteDevices } from '../lib/bleManager';
 import { useAuth } from '../context/AuthContext';
@@ -63,7 +63,6 @@ export default function HomeScreen({ navigation }) {
   const pollTimer = useRef(null);
   const locationSub = useRef(null);
   const stopBleScan = useRef(null);
-  const realtimeSub = useRef(null);
   const searchDebounce = useRef(null);
 
   // Load preferences
@@ -74,11 +73,7 @@ export default function HomeScreen({ navigation }) {
     });
 
     if (!isGuest && userId) {
-      supabase
-        .from('user_preferences')
-        .select('alert_radius_m, notify_ice, notify_bluetooth, notify_route')
-        .eq('user_id', userId)
-        .single()
+      client.get('/api/app/settings')
         .then(({ data }) => {
           if (data?.alert_radius_m) setAlertRadius(data.alert_radius_m);
           if (data) setPrefs({
@@ -86,7 +81,9 @@ export default function HomeScreen({ navigation }) {
             notify_bluetooth: data.notify_bluetooth ?? true,
             notify_route:     data.notify_route     ?? true,
           });
-        });
+          AsyncStorage.setItem('user_preferences_cache', JSON.stringify(data));
+        })
+        .catch(() => {});
     }
   }, [userId, isGuest]);
 
@@ -139,7 +136,6 @@ export default function HomeScreen({ navigation }) {
       if (locationSub.current) locationSub.current.remove();
       if (stopBleScan.current) stopBleScan.current();
       if (searchDebounce.current) clearTimeout(searchDebounce.current);
-      if (realtimeSub.current) realtimeSub.current.unsubscribe();
       resetHeadingHistory();
     };
   }, []);
@@ -160,9 +156,8 @@ export default function HomeScreen({ navigation }) {
               projectId: 'frostbyte-alert-app',
             }).catch(() => null);
             if (pushToken) {
-              await supabase
-                .from('user_preferences')
-                .upsert({ user_id: userId, push_token: pushToken.data }, { onConflict: 'user_id' });
+              await client.post('/api/app/push-token', { push_token: pushToken.data })
+                .catch(() => {});
             }
           } catch (e) {}
         }
@@ -202,15 +197,7 @@ export default function HomeScreen({ navigation }) {
 
       startBleScan();
 
-      // Real-time subscription — instant updates when alerts change in Supabase
-      realtimeSub.current = subscribeToAlerts(
-        (alert) => setAllAlerts(prev => {
-          if (prev.find(a => a.id === alert.id)) return prev;
-          return [...prev, alert];
-        }),
-        (alert) => setAllAlerts(prev => prev.map(a => a.id === alert.id ? alert : a)),
-        (alert) => setAllAlerts(prev => prev.filter(a => a.id !== alert.id))
-      );
+      // Alerts are fetched by polling every 30s — no realtime subscription needed
 
     } catch (err) {
       console.error('setupPermissions error:', err.message);
@@ -315,7 +302,6 @@ export default function HomeScreen({ navigation }) {
     switch (fetchSource) {
       case FetchSource.BACKEND:   return 'Local server';
       case FetchSource.SUPABASE:  return 'Live';
-      case FetchSource.PI_PROXY:  return 'Direct from device';
       case FetchSource.CACHE:     return `Cached ${cacheAge}min ago`;
       case FetchSource.NONE:      return 'Offline';
       default:                    return '';
@@ -325,8 +311,7 @@ export default function HomeScreen({ navigation }) {
   const getSourceColor = () => {
     switch (fetchSource) {
       case FetchSource.BACKEND:   return '#1a2a3d';
-      case FetchSource.SUPABASE:  return '#1a3d1a';
-      case FetchSource.PI_PROXY:  return '#1a2a3d';
+
       case FetchSource.CACHE:     return '#3d3a1a';
       case FetchSource.NONE:      return '#3d1a1a';
       default:                    return '#1a1a2e';

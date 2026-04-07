@@ -28,17 +28,8 @@ export default function RegisterScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      const data = await register(email, password);
-      // If Supabase email confirmation is enabled, inform the user
-      if (data.user && !data.session) {
-        Alert.alert(
-          'Check your email',
-          'A confirmation link has been sent to ' + email + '. Click it to activate your account.',
-          [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
-        );
-      }
-      // If email confirmation is disabled, session is set automatically
-      // and navigation happens via AuthContext
+      await register(email, password);
+      // Session saved automatically, navigation happens via AuthContext
     } catch (err) {
       Alert.alert('Registration Failed', err.message || 'Something went wrong.');
     } finally {
