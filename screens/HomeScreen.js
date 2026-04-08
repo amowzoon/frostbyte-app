@@ -98,7 +98,12 @@ export default function HomeScreen({ navigation }) {
   }, [navigation]);
 
   useEffect(() => {
-    if (!location || allAlerts.length === 0) return;
+    if (!location) return;
+    if (allAlerts.length === 0) {
+      setNearbyAlerts([]);
+      setRouteAlerts([]);
+      return;
+    }
 
     const nearby = filterAlertsByRadius(
       allAlerts, location.latitude, location.longitude, alertRadius, 0
@@ -128,6 +133,23 @@ export default function HomeScreen({ navigation }) {
       setRouteSegments(splitRouteSegments(routeCoords, iceOnRoute));
     }
   }, [allAlerts, location, heading, speed, alertRadius, prefs, routeCoords, warnSeconds]);
+
+  // Poll backend every 5s using a ref for location to avoid restarting the interval
+  const locationRef = useRef(null);
+  useEffect(() => { locationRef.current = location; }, [location]);
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (!locationRef.current) return;
+      const result = await fetchAlerts(locationRef.current.latitude, locationRef.current.longitude, 2000);
+      console.log('[poll] alerts:', result.alerts.length, 'source:', result.source);
+      setAllAlerts(result.alerts);
+      setFetchSource(result.source);
+      setCacheAge(result.cacheAge);
+      setLastUpdated(new Date());
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     setupPermissions();
@@ -524,6 +546,18 @@ export default function HomeScreen({ navigation }) {
         <MaterialIcons name="my-location" size={22} color="#fff" />
       </TouchableOpacity>
 
+      <TouchableOpacity style={[styles.iconButton, styles.refreshIconButton]} onPress={async () => {
+        if (!locationRef.current) return;
+        const result = await fetchAlerts(locationRef.current.latitude, locationRef.current.longitude, 2000);
+        console.log('[manual refresh] alerts:', result.alerts.length);
+        setAllAlerts(result.alerts);
+        setFetchSource(result.source);
+        setCacheAge(result.cacheAge);
+        setLastUpdated(new Date());
+      }}>
+        <MaterialIcons name="refresh" size={22} color="#fff" />
+      </TouchableOpacity>
+
       <TouchableOpacity style={[styles.iconButton, styles.bleIconButton]} onPress={startBleScan}>
         <MaterialIcons name="bluetooth-searching" size={22} color="#4fc3f7" />
       </TouchableOpacity>
@@ -658,6 +692,9 @@ const styles = StyleSheet.create({
     bottom: 260,
     backgroundColor: '#0f3460',
     borderColor: '#4fc3f7',
+  },
+  refreshIconButton: {
+    bottom: 140,
   },
   legend: {
     position: 'absolute',

@@ -5,7 +5,7 @@ export default {
     ...appJson.expo,
     extra: {
       ...appJson.expo.extra,
-      backendUrl: process.env.BACKEND_URL || 'http://10.0.0.18:8000',
+      backendUrl: process.env.BACKEND_URL || 'http://localhost:8080',
     },
   },
 };
