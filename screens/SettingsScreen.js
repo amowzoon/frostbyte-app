@@ -5,11 +5,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Slider from '@react-native-community/slider';
-import { supabase } from '../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { registerBackgroundAlertTask } from '../lib/backgroundAlertTask';
 import { useAuth } from '../context/AuthContext';
 import { MaterialIcons } from '@expo/vector-icons';
+import client from '../api/client';
 
 const DEFAULT_PREFS = {
   alert_radius_m: 500,
@@ -23,22 +23,17 @@ const snapToStep = (v) => Math.round(v / 5) * 5;
 
 export default function SettingsScreen({ navigation }) {
   const { logout, email, userId } = useAuth();
-  const [loading, setLoading]       = useState(true);
-  const [saving, setSaving]         = useState(false);
-  const [prefs, setPrefs]           = useState(DEFAULT_PREFS);
+  const [loading, setLoading]         = useState(true);
+  const [saving, setSaving]           = useState(false);
+  const [prefs, setPrefs]             = useState(DEFAULT_PREFS);
   const [warnSeconds, setWarnSeconds] = useState(DEFAULT_WARN_SECONDS);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   useEffect(() => { loadSettings(); }, []);
 
   const loadSettings = async () => {
     try {
-      const { data, error } = await supabase
-        .from('user_preferences')
-        .select('alert_radius_m, notify_ice, notify_bluetooth, notify_route')
-        .eq('user_id', userId)
-        .single();
-
-      if (error && error.code !== 'PGRST116') throw error;
+      const { data } = await client.get('/api/app/settings');
       if (data) {
         setPrefs({
           alert_radius_m:   data.alert_radius_m   ?? DEFAULT_PREFS.alert_radius_m,
@@ -47,32 +42,24 @@ export default function SettingsScreen({ navigation }) {
           notify_route:     data.notify_route     ?? DEFAULT_PREFS.notify_route,
         });
       }
-
-      // Load warn seconds from local storage
       const stored = await AsyncStorage.getItem('warn_seconds');
       if (stored) setWarnSeconds(snapToStep(parseInt(stored)));
       else setWarnSeconds(DEFAULT_WARN_SECONDS);
-
     } catch (err) {
       console.warn('Failed to load settings:', err.message);
     } finally {
       setLoading(false);
+      setSettingsLoaded(true);
     }
   };
 
   const saveSettings = async () => {
     setSaving(true);
     try {
-      const { error } = await supabase
-        .from('user_preferences')
-        .upsert({ user_id: userId, ...prefs, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
-      if (error) throw error;
-
-      // Save warn_seconds locally (not in Supabase — it's a local UI preference)
+      await client.patch('/api/app/settings', { user_id: userId, ...prefs });
       await AsyncStorage.setItem('warn_seconds', warnSeconds.toString());
       await AsyncStorage.setItem('user_preferences_cache', JSON.stringify(prefs));
       await registerBackgroundAlertTask();
-
       Alert.alert('Saved', 'Your settings have been updated.');
     } catch (err) {
       Alert.alert('Error', 'Failed to save settings: ' + err.message);
@@ -109,10 +96,6 @@ export default function SettingsScreen({ navigation }) {
           <Text style={styles.rowLabel}>Email</Text>
           <Text style={styles.rowValue}>{email}</Text>
         </View>
-        <View style={styles.row}>
-          <Text style={styles.rowLabel}>Session</Text>
-          <Text style={styles.rowValue}>Managed by Supabase</Text>
-        </View>
       </View>
 
       {/* Alert radius */}
@@ -126,6 +109,7 @@ export default function SettingsScreen({ navigation }) {
           You will be alerted when ice is detected within this distance of your location
         </Text>
         <Slider
+          key={`radius-${settingsLoaded}`}
           style={styles.slider}
           minimumValue={100}
           maximumValue={2000}
@@ -153,6 +137,7 @@ export default function SettingsScreen({ navigation }) {
           How far ahead the app warns you when your route is heading toward ice
         </Text>
         <Slider
+          key={`warn-${settingsLoaded}`}
           style={styles.slider}
           minimumValue={5}
           maximumValue={30}
@@ -227,11 +212,11 @@ export default function SettingsScreen({ navigation }) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Data and Privacy</Text>
         <Text style={styles.privacyText}>
-          Your email and password are stored securely by Supabase and never touch the FrostByte server.
+          Your email and password are stored securely on the FrostByte server and never shared.
           Your session token is stored encrypted on your device.
-          Your preferences are stored in Supabase and accessible only by your account.
+          Your preferences are stored on the FrostByte server and accessible only by your account.
           No location history is stored anywhere.
-          Ice alerts are stored in Supabase and are visible to all app users.
+          Ice alerts are visible to all app users.
         </Text>
       </View>
 
@@ -258,7 +243,6 @@ const styles = StyleSheet.create({
   header:           { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#0f3460' },
   headerTitle:      { color: '#fff', fontSize: 17, fontWeight: 'bold' },
   backBtn:          { paddingVertical: 4, paddingRight: 12, width: 60 },
-
   content:          { padding: 20, paddingBottom: 40 },
   loadingContainer: { flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'center', alignItems: 'center' },
   section:          { backgroundColor: '#16213e', borderRadius: 12, padding: 16, marginBottom: 16 },
