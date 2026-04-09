@@ -7,7 +7,7 @@ import {
 import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
-import { fetchAlerts, FetchSource } from '../lib/networkManager';
+import { fetchAlerts, FetchSource, subscribeToAlerts } from '../lib/networkManager';
 import client from '../api/client';
 import { filterAlertsByRadius, getRouteAlerts, updateHeadingHistory, resetHeadingHistory } from '../lib/routeAlert';
 import { scanForFrostByteDevices } from '../lib/bleManager';
@@ -46,13 +46,11 @@ export default function HomeScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
 
-  // Destination search
   const [destQuery, setDestQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
 
-  // Navigation route
   const [routeCoords, setRouteCoords] = useState(null);
   const [routeIceAlerts, setRouteIceAlerts] = useState([]);
   const [routeSegments, setRouteSegments] = useState([]);
@@ -64,14 +62,12 @@ export default function HomeScreen({ navigation }) {
   const locationSub = useRef(null);
   const stopBleScan = useRef(null);
   const searchDebounce = useRef(null);
+  const wsSub = useRef(null);
 
-  // Load preferences
   useEffect(() => {
-    // Load warn seconds from AsyncStorage (set by SettingsScreen slider)
     AsyncStorage.getItem('warn_seconds').then(val => {
       if (val) setWarnSeconds(parseInt(val));
     });
-
     if (!isGuest && userId) {
       client.get('/api/app/settings')
         .then(({ data }) => {
@@ -87,7 +83,6 @@ export default function HomeScreen({ navigation }) {
     }
   }, [userId, isGuest]);
 
-  // Reload warn seconds when returning from Settings
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
       AsyncStorage.getItem('warn_seconds').then(val => {
@@ -104,17 +99,14 @@ export default function HomeScreen({ navigation }) {
       setRouteAlerts([]);
       return;
     }
-
     const nearby = filterAlertsByRadius(
       allAlerts, location.latitude, location.longitude, alertRadius, 0
     );
     setNearbyAlerts(nearby);
-
     const onRoute = getRouteAlerts(
       location.latitude, location.longitude, speed, allAlerts, warnSeconds
     );
     setRouteAlerts(onRoute);
-
     if (prefs.notify_route && onRoute.length > 0) {
       Notifications.scheduleNotificationAsync({
         content: {
@@ -126,7 +118,6 @@ export default function HomeScreen({ navigation }) {
         trigger: null,
       });
     }
-
     if (routeCoords) {
       const iceOnRoute = checkRouteForIce(routeCoords, allAlerts);
       setRouteIceAlerts(iceOnRoute);
@@ -134,7 +125,6 @@ export default function HomeScreen({ navigation }) {
     }
   }, [allAlerts, location, heading, speed, alertRadius, prefs, routeCoords, warnSeconds]);
 
-  // Poll backend every 5s using a ref for location to avoid restarting the interval
   const locationRef = useRef(null);
   useEffect(() => { locationRef.current = location; }, [location]);
 
@@ -142,7 +132,6 @@ export default function HomeScreen({ navigation }) {
     const interval = setInterval(async () => {
       if (!locationRef.current) return;
       const result = await fetchAlerts(locationRef.current.latitude, locationRef.current.longitude, 2000);
-      console.log('[poll] alerts:', result.alerts.length, 'source:', result.source);
       setAllAlerts(result.alerts);
       setFetchSource(result.source);
       setCacheAge(result.cacheAge);
@@ -158,6 +147,7 @@ export default function HomeScreen({ navigation }) {
       if (locationSub.current) locationSub.current.remove();
       if (stopBleScan.current) stopBleScan.current();
       if (searchDebounce.current) clearTimeout(searchDebounce.current);
+      if (wsSub.current) wsSub.current();
       resetHeadingHistory();
     };
   }, []);
@@ -178,8 +168,7 @@ export default function HomeScreen({ navigation }) {
               projectId: 'frostbyte-alert-app',
             }).catch(() => null);
             if (pushToken) {
-              await client.post('/api/app/push-token', { push_token: pushToken.data })
-                .catch(() => {});
+              await client.post('/api/app/push-token', { push_token: pushToken.data }).catch(() => {});
             }
           } catch (e) {}
         }
@@ -219,7 +208,15 @@ export default function HomeScreen({ navigation }) {
 
       startBleScan();
 
-      // Alerts are fetched by polling every 30s — no realtime subscription needed
+      // WebSocket subscription for instant alert delivery
+      wsSub.current = subscribeToAlerts((alert) => {
+        setAllAlerts(prev => {
+          if (prev.find(a => a.id === alert.id)) return prev;
+          return [...prev, alert];
+        });
+        setFetchSource(FetchSource.WEBSOCKET);
+        setLastUpdated(new Date());
+      });
 
     } catch (err) {
       console.error('setupPermissions error:', err.message);
@@ -250,10 +247,6 @@ export default function HomeScreen({ navigation }) {
     }, 15000);
   };
 
-  // ---------------------------------------------------------------------------
-  // Search with debounced autocomplete
-  // ---------------------------------------------------------------------------
-
   const handleSearchChange = (text) => {
     setDestQuery(text);
     if (searchDebounce.current) clearTimeout(searchDebounce.current);
@@ -272,32 +265,26 @@ export default function HomeScreen({ navigation }) {
     setSuggestions([]);
     setSearchFocused(false);
     if (!location) { Alert.alert('No location', 'Waiting for GPS fix.'); return; }
-
     setRouteLoading(true);
     const route = await fetchRoute(location, { lat: place.lat, lon: place.lon });
     setRouteLoading(false);
-
     if (!route) {
       Alert.alert('Route error', 'Could not get directions. Check your ORS API key in routeNav.js.');
       return;
     }
-
     const iceOnRoute = checkRouteForIce(route.coordinates, allAlerts);
     setRouteCoords(route.coordinates);
     setRouteIceAlerts(iceOnRoute);
     setRouteSegments(splitRouteSegments(route.coordinates, iceOnRoute));
     setRouteInfo({ distanceKm: route.distanceKm, durationMin: route.durationMin });
-
     if (mapRef.current && route.coordinates.length > 1) {
       mapRef.current.fitToCoordinates(route.coordinates, {
         edgePadding: { top: 160, right: 40, bottom: 200, left: 40 },
         animated: true,
       });
     }
-
     if (iceOnRoute.length > 0) {
-      Alert.alert(
-        '⚠️ Ice on your route',
+      Alert.alert('⚠️ Ice on your route',
         `${iceOnRoute.length} ice alert${iceOnRoute.length > 1 ? 's' : ''} detected along your route.`
       );
     }
@@ -312,8 +299,6 @@ export default function HomeScreen({ navigation }) {
     setSuggestions([]);
   };
 
-  // ---------------------------------------------------------------------------
-
   const getAlertColor = (confidence) => {
     if (confidence > 0.75) return '#ff3b30';
     if (confidence > 0.5)  return '#ff9500';
@@ -322,8 +307,8 @@ export default function HomeScreen({ navigation }) {
 
   const getSourceLabel = () => {
     switch (fetchSource) {
+      case FetchSource.WEBSOCKET: return 'Live';
       case FetchSource.BACKEND:   return 'Local server';
-      case FetchSource.SUPABASE:  return 'Live';
       case FetchSource.CACHE:     return `Cached ${cacheAge}min ago`;
       case FetchSource.NONE:      return 'Offline';
       default:                    return '';
@@ -332,8 +317,8 @@ export default function HomeScreen({ navigation }) {
 
   const getSourceColor = () => {
     switch (fetchSource) {
+      case FetchSource.WEBSOCKET: return '#1a3d1a';
       case FetchSource.BACKEND:   return '#1a2a3d';
-
       case FetchSource.CACHE:     return '#3d3a1a';
       case FetchSource.NONE:      return '#3d1a1a';
       default:                    return '#1a1a2e';
@@ -368,8 +353,6 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <View>
@@ -388,7 +371,6 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Persistent search bar */}
         <View style={styles.searchBar}>
           <MaterialIcons name="search" size={18} color="#666" style={{ marginRight: 6 }} />
           <TextInput
@@ -409,7 +391,6 @@ export default function HomeScreen({ navigation }) {
           )}
         </View>
 
-        {/* Autocomplete suggestions */}
         {searchFocused && (suggestions.length > 0 || suggestionsLoading) && (
           <View style={styles.suggestions}>
             {suggestionsLoading && suggestions.length === 0 && (
@@ -437,7 +418,6 @@ export default function HomeScreen({ navigation }) {
         )}
       </View>
 
-      {/* Status banner */}
       <View style={[styles.banner, { backgroundColor: getSourceColor() }]}>
         <View style={styles.bannerRow}>
           <Text style={styles.bannerText}>
@@ -449,7 +429,6 @@ export default function HomeScreen({ navigation }) {
           </Text>
           <Text style={styles.sourceLabel}>{getSourceLabel()}</Text>
         </View>
-
         {visibleRouteAlerts.length > 0 && (
           <Text style={styles.routeWarning}>
             Ice on your route — {visibleRouteAlerts[0].etaLabel === 'now'
@@ -457,7 +436,6 @@ export default function HomeScreen({ navigation }) {
               : `${visibleRouteAlerts[0].etaLabel} ahead`}
           </Text>
         )}
-
         {routeInfo && (
           <View style={styles.routeInfoRow}>
             <Text style={styles.routeInfoText}>
@@ -471,13 +449,11 @@ export default function HomeScreen({ navigation }) {
             </TouchableOpacity>
           </View>
         )}
-
         {lastUpdated && (
           <Text style={styles.bannerSub}>Updated {lastUpdated.toLocaleTimeString()}</Text>
         )}
       </View>
 
-      {/* Map */}
       <MapView
         ref={mapRef}
         style={styles.map}
@@ -512,7 +488,6 @@ export default function HomeScreen({ navigation }) {
             />
           </React.Fragment>
         ))}
-
         {visibleRouteAlerts.map(alert => (
           <Circle
             key={`route-${alert.id}`}
@@ -523,7 +498,6 @@ export default function HomeScreen({ navigation }) {
             strokeWidth={3}
           />
         ))}
-
         {routeSegments.map((seg, i) => (
           <Polyline
             key={`nav-${i}`}
@@ -532,7 +506,6 @@ export default function HomeScreen({ navigation }) {
             strokeWidth={seg.isDanger ? 5 : 3}
           />
         ))}
-
         {routeCoords && routeCoords.length > 0 && (
           <Marker
             coordinate={routeCoords[routeCoords.length - 1]}
@@ -549,7 +522,6 @@ export default function HomeScreen({ navigation }) {
       <TouchableOpacity style={[styles.iconButton, styles.refreshIconButton]} onPress={async () => {
         if (!locationRef.current) return;
         const result = await fetchAlerts(locationRef.current.latitude, locationRef.current.longitude, 2000);
-        console.log('[manual refresh] alerts:', result.alerts.length);
         setAllAlerts(result.alerts);
         setFetchSource(result.source);
         setCacheAge(result.cacheAge);
@@ -601,62 +573,19 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#1a1a2e' },
   loadingContainer: { flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'center', alignItems: 'center' },
   loadingText: { color: '#888', marginTop: 12, fontSize: 14 },
-  header: {
-    backgroundColor: '#1a1a2e',
-    paddingTop: Platform.OS === 'ios' ? 52 : 40,
-    paddingBottom: 8,
-    zIndex: 100,
-  },
-  headerTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    marginBottom: 10,
-  },
+  header: { backgroundColor: '#1a1a2e', paddingTop: Platform.OS === 'ios' ? 52 : 40, paddingBottom: 8, zIndex: 100 },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, marginBottom: 10 },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
   guestBadge: { color: '#4fc3f7', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   headerBtn: { paddingHorizontal: 8, paddingVertical: 4 },
   headerBtnText: { color: '#4fc3f7', fontSize: 14 },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0f1b2d',
-    marginHorizontal: 16,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#0f3460',
-  },
-  searchInput: {
-    flex: 1,
-    color: '#fff',
-    fontSize: 14,
-    paddingVertical: 0,
-  },
+  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0f1b2d', marginHorizontal: 16, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: '#0f3460' },
+  searchInput: { flex: 1, color: '#fff', fontSize: 14, paddingVertical: 0 },
   searchClear: { padding: 4 },
-  suggestions: {
-    marginHorizontal: 16,
-    marginTop: 4,
-    backgroundColor: '#0f1b2d',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#0f3460',
-    overflow: 'hidden',
-    zIndex: 200,
-  },
-  suggestionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  suggestionBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#1a2a3d',
-  },
+  suggestions: { marginHorizontal: 16, marginTop: 4, backgroundColor: '#0f1b2d', borderRadius: 10, borderWidth: 1, borderColor: '#0f3460', overflow: 'hidden', zIndex: 200 },
+  suggestionItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10 },
+  suggestionBorder: { borderBottomWidth: 1, borderBottomColor: '#1a2a3d' },
   suggestionMain: { color: '#fff', fontSize: 13, fontWeight: '500' },
   suggestionSub: { color: '#666', fontSize: 11, marginTop: 1 },
   suggestionDist: { color: '#4fc3f7', fontSize: 11, marginLeft: 8, flexShrink: 0 },
@@ -670,41 +599,10 @@ const styles = StyleSheet.create({
   clearRoute: { color: '#aaa', fontSize: 14, paddingLeft: 8 },
   bannerSub: { color: '#888', fontSize: 11, marginTop: 2 },
   map: { flex: 1 },
-  iconButton: {
-    position: 'absolute',
-    bottom: 200,
-    right: 16,
-    backgroundColor: '#1a1a2e',
-    borderRadius: 28,
-    width: 48,
-    height: 48,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
-    elevation: 5,
-    borderWidth: 1,
-    borderColor: '#0f3460',
-  },
-  bleIconButton: {
-    bottom: 260,
-    backgroundColor: '#0f3460',
-    borderColor: '#4fc3f7',
-  },
-  refreshIconButton: {
-    bottom: 140,
-  },
-  legend: {
-    position: 'absolute',
-    bottom: 40,
-    left: 16,
-    backgroundColor: 'rgba(26, 26, 46, 0.92)',
-    borderRadius: 10,
-    padding: 12,
-    minWidth: 150,
-  },
+  iconButton: { position: 'absolute', bottom: 200, right: 16, backgroundColor: '#1a1a2e', borderRadius: 28, width: 48, height: 48, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 5, borderWidth: 1, borderColor: '#0f3460' },
+  bleIconButton: { bottom: 260, backgroundColor: '#0f3460', borderColor: '#4fc3f7' },
+  refreshIconButton: { bottom: 140 },
+  legend: { position: 'absolute', bottom: 40, left: 16, backgroundColor: 'rgba(26, 26, 46, 0.92)', borderRadius: 10, padding: 12, minWidth: 150 },
   legendTitle: { color: '#fff', fontSize: 12, fontWeight: 'bold', marginBottom: 6 },
   legendRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
   legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
