@@ -10,11 +10,10 @@ import { registerBackgroundAlertTask } from './lib/backgroundAlertTask';
 
 const Stack = createStackNavigator();
 
-function AppNavigator() {
+const AppNavigator = React.memo(function AppNavigator() {
   const { isLoggedIn, isGuest } = useAuth();
 
   useEffect(() => {
-    // Register background task once user is in the app
     if (isLoggedIn || isGuest) {
       registerBackgroundAlertTask().then(success => {
         if (success) {
@@ -41,7 +40,7 @@ function AppNavigator() {
       </Stack.Navigator>
     </NavigationContainer>
   );
-}
+});
 
 export default function App() {
   return (
