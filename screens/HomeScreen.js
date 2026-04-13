@@ -63,7 +63,34 @@ export default function HomeScreen({ navigation }) {
   const wsSub = useRef(null);
 
   useEffect(() => {
+<<<<<<< HEAD
     const unsubscribe = navigation.addListener('focus', () => {});
+=======
+    AsyncStorage.getItem('warn_seconds').then(val => {
+      if (val) setWarnSeconds(parseInt(val));
+    });
+    if (!isGuest && userId) {
+      client.get('/api/app/settings')
+        .then(({ data }) => {
+          if (data?.alert_radius_m) setAlertRadius(data.alert_radius_m);
+          if (data) setPrefs({
+            notify_ice:       data.notify_ice       ?? true,
+            notify_bluetooth: data.notify_bluetooth ?? true,
+            notify_route:     data.notify_route     ?? true,
+          });
+          AsyncStorage.setItem('user_preferences_cache', JSON.stringify(data));
+        })
+        .catch(() => {});
+    }
+  }, [userId, isGuest]);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      AsyncStorage.getItem('warn_seconds').then(val => {
+        if (val) setWarnSeconds(parseInt(val));
+      });
+    });
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
     return unsubscribe;
   }, [navigation]);
 
@@ -78,12 +105,19 @@ export default function HomeScreen({ navigation }) {
       allAlerts, location.latitude, location.longitude, alertRadius, 0
     );
     setNearbyAlerts(nearby);
+<<<<<<< HEAD
     const effectiveWarnSeconds = warnSeconds ?? DEFAULT_WARN_SECONDS;
+=======
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
     const onRoute = getRouteAlerts(
       location.latitude, location.longitude, speed, allAlerts, effectiveWarnSeconds
     );
     setRouteAlerts(onRoute);
+<<<<<<< HEAD
     if (prefs?.notify_route && onRoute.length > 0) {
+=======
+    if (prefs.notify_route && onRoute.length > 0) {
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
       Notifications.scheduleNotificationAsync({
         content: {
           title: 'Ice ahead on your route',
@@ -184,6 +218,10 @@ export default function HomeScreen({ navigation }) {
 
       startBleScan();
 
+<<<<<<< HEAD
+=======
+      // WebSocket subscription for instant alert delivery
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
       wsSub.current = subscribeToAlerts((alert) => {
         setAllAlerts(prev => {
           if (prev.find(a => a.id === alert.id)) return prev;

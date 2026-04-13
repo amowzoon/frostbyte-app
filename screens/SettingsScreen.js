@@ -4,6 +4,11 @@ import {
   ActivityIndicator, Alert, Switch, ScrollView, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+<<<<<<< HEAD
+=======
+import Slider from '@react-native-community/slider';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
 import { registerBackgroundAlertTask } from '../lib/backgroundAlertTask';
 import { useAuth } from '../context/AuthContext';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -13,6 +18,7 @@ const snapToStep = (v) => Math.round(v / 5) * 5;
 const THUMB = 28;
 const TRACK_H = 4;
 
+<<<<<<< HEAD
 function CustomSlider({ value, minimumValue, maximumValue, step, onValueChange }) {
   const trackRef = useRef(null);
   const trackPageXRef = useRef(0);
@@ -20,6 +26,15 @@ function CustomSlider({ value, minimumValue, maximumValue, step, onValueChange }
   const isDragging = useRef(false);
   const [thumbPct, setThumbPct] = useState(null);
   const [layoutDone, setLayoutDone] = useState(false);
+=======
+export default function SettingsScreen({ navigation }) {
+  const { logout, email, userId } = useAuth();
+  const [loading, setLoading]         = useState(true);
+  const [saving, setSaving]           = useState(false);
+  const [prefs, setPrefs]             = useState(DEFAULT_PREFS);
+  const [warnSeconds, setWarnSeconds] = useState(DEFAULT_WARN_SECONDS);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
 
   const clamp = (v) => Math.max(minimumValue, Math.min(maximumValue, v));
   const toPercent = (v) => (clamp(v) - minimumValue) / (maximumValue - minimumValue);
@@ -28,6 +43,7 @@ function CustomSlider({ value, minimumValue, maximumValue, step, onValueChange }
     return step ? Math.round(raw / step) * step : raw;
   };
 
+<<<<<<< HEAD
   const measure = (cb) => {
     if (trackRef.current) {
       trackRef.current.measure((x, y, w, h, pageX) => {
@@ -35,6 +51,27 @@ function CustomSlider({ value, minimumValue, maximumValue, step, onValueChange }
         trackWidthRef.current = w;
         if (cb) cb(w);
       });
+=======
+  const loadSettings = async () => {
+    try {
+      const { data } = await client.get('/api/app/settings');
+      if (data) {
+        setPrefs({
+          alert_radius_m:   data.alert_radius_m   ?? DEFAULT_PREFS.alert_radius_m,
+          notify_ice:       data.notify_ice       ?? DEFAULT_PREFS.notify_ice,
+          notify_bluetooth: data.notify_bluetooth ?? DEFAULT_PREFS.notify_bluetooth,
+          notify_route:     data.notify_route     ?? DEFAULT_PREFS.notify_route,
+        });
+      }
+      const stored = await AsyncStorage.getItem('warn_seconds');
+      if (stored) setWarnSeconds(snapToStep(parseInt(stored)));
+      else setWarnSeconds(DEFAULT_WARN_SECONDS);
+    } catch (err) {
+      console.warn('Failed to load settings:', err.message);
+    } finally {
+      setLoading(false);
+      setSettingsLoaded(true);
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
     }
   };
 
@@ -134,7 +171,12 @@ export default function SettingsScreen({ navigation }) {
     setSaving(true);
     try {
       await client.patch('/api/app/settings', { user_id: userId, ...prefs });
+<<<<<<< HEAD
       await savePrefs(prefs, warnSeconds);
+=======
+      await AsyncStorage.setItem('warn_seconds', warnSeconds.toString());
+      await AsyncStorage.setItem('user_preferences_cache', JSON.stringify(prefs));
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
       await registerBackgroundAlertTask();
       Alert.alert('Saved', 'Your settings have been updated.');
     } catch (err) {
@@ -182,8 +224,14 @@ export default function SettingsScreen({ navigation }) {
         <Text style={styles.hint}>
           You will be alerted when ice is detected within this distance of your location
         </Text>
+<<<<<<< HEAD
         <CustomSlider
           value={prefs.alert_radius_m}
+=======
+        <Slider
+          key={`radius-${settingsLoaded}`}
+          style={styles.slider}
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
           minimumValue={100}
           maximumValue={2000}
           step={100}
@@ -204,8 +252,14 @@ export default function SettingsScreen({ navigation }) {
         <Text style={styles.hint}>
           How far ahead the app warns you when your route is heading toward ice
         </Text>
+<<<<<<< HEAD
         <CustomSlider
           value={warnSeconds}
+=======
+        <Slider
+          key={`warn-${settingsLoaded}`}
+          style={styles.slider}
+>>>>>>> 5abe7f9aa115fd3977ebae156dc8afcaebe77fe7
           minimumValue={5}
           maximumValue={30}
           step={5}
