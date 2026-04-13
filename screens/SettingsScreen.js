@@ -1,64 +1,140 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
   ActivityIndicator, Alert, Switch, ScrollView, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Slider from '@react-native-community/slider';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { registerBackgroundAlertTask } from '../lib/backgroundAlertTask';
 import { useAuth } from '../context/AuthContext';
 import { MaterialIcons } from '@expo/vector-icons';
 import client from '../api/client';
 
-const DEFAULT_PREFS = {
-  alert_radius_m: 500,
-  notify_ice: true,
-  notify_bluetooth: true,
-  notify_route: true,
-};
-
-const DEFAULT_WARN_SECONDS = 10;
 const snapToStep = (v) => Math.round(v / 5) * 5;
+const THUMB = 28;
+const TRACK_H = 4;
 
-export default function SettingsScreen({ navigation }) {
-  const { logout, email, userId } = useAuth();
-  const [loading, setLoading]         = useState(true);
-  const [saving, setSaving]           = useState(false);
-  const [prefs, setPrefs]             = useState(DEFAULT_PREFS);
-  const [warnSeconds, setWarnSeconds] = useState(DEFAULT_WARN_SECONDS);
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
+function CustomSlider({ value, minimumValue, maximumValue, step, onValueChange }) {
+  const trackRef = useRef(null);
+  const trackPageXRef = useRef(0);
+  const trackWidthRef = useRef(0);
+  const isDragging = useRef(false);
+  const [thumbPct, setThumbPct] = useState(null);
+  const [layoutDone, setLayoutDone] = useState(false);
 
-  useEffect(() => { loadSettings(); }, []);
+  const clamp = (v) => Math.max(minimumValue, Math.min(maximumValue, v));
+  const toPercent = (v) => (clamp(v) - minimumValue) / (maximumValue - minimumValue);
+  const toValue = (pct) => {
+    const raw = minimumValue + Math.max(0, Math.min(1, pct)) * (maximumValue - minimumValue);
+    return step ? Math.round(raw / step) * step : raw;
+  };
 
-  const loadSettings = async () => {
-    try {
-      const { data } = await client.get('/api/app/settings');
-      if (data) {
-        setPrefs({
-          alert_radius_m:   data.alert_radius_m   ?? DEFAULT_PREFS.alert_radius_m,
-          notify_ice:       data.notify_ice       ?? DEFAULT_PREFS.notify_ice,
-          notify_bluetooth: data.notify_bluetooth ?? DEFAULT_PREFS.notify_bluetooth,
-          notify_route:     data.notify_route     ?? DEFAULT_PREFS.notify_route,
-        });
-      }
-      const stored = await AsyncStorage.getItem('warn_seconds');
-      if (stored) setWarnSeconds(snapToStep(parseInt(stored)));
-      else setWarnSeconds(DEFAULT_WARN_SECONDS);
-    } catch (err) {
-      console.warn('Failed to load settings:', err.message);
-    } finally {
-      setLoading(false);
-      setSettingsLoaded(true);
+  const measure = (cb) => {
+    if (trackRef.current) {
+      trackRef.current.measure((x, y, w, h, pageX) => {
+        trackPageXRef.current = pageX;
+        trackWidthRef.current = w;
+        if (cb) cb(w);
+      });
     }
   };
+
+  const onLayout = () => {
+    measure((w) => {
+      setThumbPct(toPercent(value));
+      setLayoutDone(true);
+    });
+  };
+
+  // Only sync from parent after layout is done and not dragging
+  React.useEffect(() => {
+    if (layoutDone && !isDragging.current) {
+      setThumbPct(toPercent(value));
+    }
+  }, [value, layoutDone]);
+
+  const handleTouch = (pageX) => {
+    const w = trackWidthRef.current;
+    if (!w) return;
+    const pct = Math.max(0, Math.min(1, (pageX - trackPageXRef.current) / w));
+    setThumbPct(pct);
+    onValueChange && onValueChange(toValue(pct));
+  };
+
+  const handlers = {
+    onStartShouldSetResponder: () => true,
+    onMoveShouldSetResponder: () => true,
+    onResponderGrant: (e) => {
+      isDragging.current = true;
+      measure();
+      handleTouch(e.nativeEvent.pageX);
+    },
+    onResponderMove: (e) => {
+      handleTouch(e.nativeEvent.pageX);
+    },
+    onResponderRelease: () => { isDragging.current = false; },
+    onResponderTerminate: () => { isDragging.current = false; },
+    onResponderTerminationRequest: () => false,
+  };
+
+  const pct = thumbPct ?? toPercent(value);
+  const thumbLeft = layoutDone ? pct * (trackWidthRef.current - THUMB) : null;
+
+  return (
+    <View ref={trackRef} style={csStyles.container} onLayout={onLayout} {...handlers}>
+      <View style={csStyles.track}>
+        <View style={[csStyles.fill, { width: `${pct * 100}%` }]} />
+      </View>
+      {thumbLeft !== null && (
+        <View style={[csStyles.thumb, { left: thumbLeft }]}>
+          <Text style={csStyles.snowflake}>❄</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const csStyles = StyleSheet.create({
+  container: { height: 44, justifyContent: 'center' },
+  track:     { height: TRACK_H, backgroundColor: '#333', borderRadius: 2, overflow: 'hidden' },
+  fill:      { height: TRACK_H, backgroundColor: '#4fc3f7' },
+  thumb:     {
+    position: 'absolute',
+    width: THUMB, height: THUMB,
+    borderRadius: THUMB / 2,
+    backgroundColor: '#4fc3f7',
+    top: '50%', marginTop: -(THUMB / 2),
+    justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#4fc3f7', shadowOpacity: 0.4,
+    shadowOffset: { width: 0, height: 1 }, shadowRadius: 4,
+    elevation: 4,
+  },
+  snowflake: { fontSize: 14, color: '#fff', lineHeight: 16 },
+});
+
+export default function SettingsScreen({ navigation }) {
+  const { logout, email, userId, prefs: savedPrefs, warnSeconds: savedWarnSeconds, prefsLoaded, savePrefs } = useAuth();
+  const [saving, setSaving]           = useState(false);
+  const [prefs, setPrefs]             = useState(savedPrefs);
+  const [warnSeconds, setWarnSeconds] = useState(savedWarnSeconds);
+
+  const prevRadiusRef = useRef(savedPrefs?.alert_radius_m);
+  const prevWarnRef   = useRef(savedWarnSeconds);
+  React.useEffect(() => {
+    if (savedPrefs?.alert_radius_m !== prevRadiusRef.current) {
+      prevRadiusRef.current = savedPrefs?.alert_radius_m;
+      setPrefs(savedPrefs);
+    }
+    if (savedWarnSeconds !== prevWarnRef.current) {
+      prevWarnRef.current = savedWarnSeconds;
+      setWarnSeconds(savedWarnSeconds);
+    }
+  }, [savedPrefs?.alert_radius_m, savedPrefs?.notify_ice, savedPrefs?.notify_bluetooth, savedPrefs?.notify_route, savedWarnSeconds]);
 
   const saveSettings = async () => {
     setSaving(true);
     try {
       await client.patch('/api/app/settings', { user_id: userId, ...prefs });
-      await AsyncStorage.setItem('warn_seconds', warnSeconds.toString());
-      await AsyncStorage.setItem('user_preferences_cache', JSON.stringify(prefs));
+      await savePrefs(prefs, warnSeconds);
       await registerBackgroundAlertTask();
       Alert.alert('Saved', 'Your settings have been updated.');
     } catch (err) {
@@ -70,7 +146,7 @@ export default function SettingsScreen({ navigation }) {
 
   const setPref = (key, value) => setPrefs(prev => ({ ...prev, [key]: value }));
 
-  if (loading) {
+  if (!prefsLoaded) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#4fc3f7" />
@@ -87,9 +163,8 @@ export default function SettingsScreen({ navigation }) {
         <Text style={styles.headerTitle}>Settings</Text>
         <View style={{ width: 60 }} />
       </View>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
-      {/* Account */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Account</Text>
         <View style={styles.row}>
@@ -98,7 +173,6 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </View>
 
-      {/* Alert radius */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Alert Radius</Text>
         <View style={styles.radiusRow}>
@@ -108,17 +182,12 @@ export default function SettingsScreen({ navigation }) {
         <Text style={styles.hint}>
           You will be alerted when ice is detected within this distance of your location
         </Text>
-        <Slider
-          key={`radius-${settingsLoaded}`}
-          style={styles.slider}
+        <CustomSlider
+          value={prefs.alert_radius_m}
           minimumValue={100}
           maximumValue={2000}
           step={100}
-          value={prefs.alert_radius_m}
           onValueChange={v => setPref('alert_radius_m', v)}
-          minimumTrackTintColor="#4fc3f7"
-          maximumTrackTintColor="#333"
-          thumbTintColor="#4fc3f7"
         />
         <View style={styles.sliderLabels}>
           <Text style={styles.sliderLabel}>100m</Text>
@@ -126,7 +195,6 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </View>
 
-      {/* Warning threshold */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Route Warning Threshold</Text>
         <View style={styles.radiusRow}>
@@ -136,17 +204,12 @@ export default function SettingsScreen({ navigation }) {
         <Text style={styles.hint}>
           How far ahead the app warns you when your route is heading toward ice
         </Text>
-        <Slider
-          key={`warn-${settingsLoaded}`}
-          style={styles.slider}
+        <CustomSlider
+          value={warnSeconds}
           minimumValue={5}
           maximumValue={30}
           step={5}
-          value={warnSeconds}
           onValueChange={v => setWarnSeconds(snapToStep(v))}
-          minimumTrackTintColor="#4fc3f7"
-          maximumTrackTintColor="#333"
-          thumbTintColor="#4fc3f7"
         />
         <View style={styles.sliderLabels}>
           <Text style={styles.sliderLabel}>5s</Text>
@@ -154,7 +217,6 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </View>
 
-      {/* Alert types */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Alert Types</Text>
 
@@ -208,7 +270,6 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </View>
 
-      {/* Data privacy */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Data and Privacy</Text>
         <Text style={styles.privacyText}>
@@ -220,7 +281,6 @@ export default function SettingsScreen({ navigation }) {
         </Text>
       </View>
 
-      {/* Save */}
       <TouchableOpacity style={styles.saveButton} onPress={saveSettings} disabled={saving}>
         {saving
           ? <ActivityIndicator color="#fff" />
@@ -228,7 +288,6 @@ export default function SettingsScreen({ navigation }) {
         }
       </TouchableOpacity>
 
-      {/* Sign out */}
       <TouchableOpacity style={styles.logoutButton} onPress={logout}>
         <Text style={styles.logoutText}>Sign Out</Text>
       </TouchableOpacity>
@@ -253,8 +312,7 @@ const styles = StyleSheet.create({
   radiusRow:        { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   radiusValue:      { color: '#4fc3f7', fontSize: 16, fontWeight: 'bold' },
   hint:             { color: '#666', fontSize: 12, marginBottom: 8 },
-  slider:           { width: '100%', height: 40 },
-  sliderLabels:     { flexDirection: 'row', justifyContent: 'space-between' },
+  sliderLabels:     { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
   sliderLabel:      { color: '#666', fontSize: 11 },
   toggleRow:        { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 4 },
   toggleInfo:       { flex: 1, marginRight: 12 },
