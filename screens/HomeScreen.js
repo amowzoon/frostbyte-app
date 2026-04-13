@@ -17,7 +17,6 @@ import { searchPlaces, fetchRoute, checkRouteForIce, splitRouteSegments } from '
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const POLL_INTERVAL_MS = 30000;
-const DEFAULT_RADIUS_M = 500;
 const DEFAULT_WARN_SECONDS = 10;
 
 Notifications.setNotificationHandler({
@@ -29,7 +28,9 @@ Notifications.setNotificationHandler({
 });
 
 export default function HomeScreen({ navigation }) {
-  const { logout, isGuest, userId } = useAuth();
+  const { logout, isGuest, userId, prefs, warnSeconds } = useAuth();
+
+  const alertRadius = prefs?.alert_radius_m ?? 500;
 
   const [location, setLocation] = useState(null);
   const [heading, setHeading] = useState(null);
@@ -38,9 +39,6 @@ export default function HomeScreen({ navigation }) {
   const [nearbyAlerts, setNearbyAlerts] = useState([]);
   const [routeAlerts, setRouteAlerts] = useState([]);
   const [bleAlerts, setBleAlerts] = useState([]);
-  const [alertRadius, setAlertRadius] = useState(DEFAULT_RADIUS_M);
-  const [warnSeconds, setWarnSeconds] = useState(DEFAULT_WARN_SECONDS);
-  const [prefs, setPrefs] = useState({ notify_ice: true, notify_bluetooth: true, notify_route: true });
   const [fetchSource, setFetchSource] = useState(FetchSource.NONE);
   const [cacheAge, setCacheAge] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -65,30 +63,7 @@ export default function HomeScreen({ navigation }) {
   const wsSub = useRef(null);
 
   useEffect(() => {
-    AsyncStorage.getItem('warn_seconds').then(val => {
-      if (val) setWarnSeconds(parseInt(val));
-    });
-    if (!isGuest && userId) {
-      client.get('/api/app/settings')
-        .then(({ data }) => {
-          if (data?.alert_radius_m) setAlertRadius(data.alert_radius_m);
-          if (data) setPrefs({
-            notify_ice:       data.notify_ice       ?? true,
-            notify_bluetooth: data.notify_bluetooth ?? true,
-            notify_route:     data.notify_route     ?? true,
-          });
-          AsyncStorage.setItem('user_preferences_cache', JSON.stringify(data));
-        })
-        .catch(() => {});
-    }
-  }, [userId, isGuest]);
-
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
-      AsyncStorage.getItem('warn_seconds').then(val => {
-        if (val) setWarnSeconds(parseInt(val));
-      });
-    });
+    const unsubscribe = navigation.addListener('focus', () => {});
     return unsubscribe;
   }, [navigation]);
 
@@ -103,11 +78,12 @@ export default function HomeScreen({ navigation }) {
       allAlerts, location.latitude, location.longitude, alertRadius, 0
     );
     setNearbyAlerts(nearby);
+    const effectiveWarnSeconds = warnSeconds ?? DEFAULT_WARN_SECONDS;
     const onRoute = getRouteAlerts(
-      location.latitude, location.longitude, speed, allAlerts, warnSeconds
+      location.latitude, location.longitude, speed, allAlerts, effectiveWarnSeconds
     );
     setRouteAlerts(onRoute);
-    if (prefs.notify_route && onRoute.length > 0) {
+    if (prefs?.notify_route && onRoute.length > 0) {
       Notifications.scheduleNotificationAsync({
         content: {
           title: 'Ice ahead on your route',
@@ -133,7 +109,7 @@ export default function HomeScreen({ navigation }) {
       if (!locationRef.current) return;
       const result = await fetchAlerts(locationRef.current.latitude, locationRef.current.longitude, 2000);
       setAllAlerts(result.alerts);
-      setFetchSource(result.source);
+      setFetchSource(prev => prev === FetchSource.WEBSOCKET ? FetchSource.WEBSOCKET : result.source);
       setCacheAge(result.cacheAge);
       setLastUpdated(new Date());
     }, 5000);
@@ -208,7 +184,6 @@ export default function HomeScreen({ navigation }) {
 
       startBleScan();
 
-      // WebSocket subscription for instant alert delivery
       wsSub.current = subscribeToAlerts((alert) => {
         setAllAlerts(prev => {
           if (prev.find(a => a.id === alert.id)) return prev;
@@ -227,7 +202,7 @@ export default function HomeScreen({ navigation }) {
   const doFetch = useCallback(async (coords) => {
     const result = await fetchAlerts(coords.latitude, coords.longitude, 2000);
     setAllAlerts(result.alerts);
-    setFetchSource(result.source);
+    setFetchSource(prev => prev === FetchSource.WEBSOCKET ? FetchSource.WEBSOCKET : result.source);
     setCacheAge(result.cacheAge);
     setLastUpdated(new Date());
   }, []);
@@ -337,10 +312,10 @@ export default function HomeScreen({ navigation }) {
   };
 
   const allMapAlerts = [
-    ...(prefs.notify_ice ? nearbyAlerts : []),
-    ...(prefs.notify_bluetooth ? bleAlerts.map(b => ({ ...b, id: `ble-${b.deviceId}` })) : []),
+    ...(prefs?.notify_ice !== false ? nearbyAlerts : []),
+    ...(prefs?.notify_bluetooth !== false ? bleAlerts.map(b => ({ ...b, id: `ble-${b.deviceId}` })) : []),
   ];
-  const visibleRouteAlerts = prefs.notify_route ? routeAlerts : [];
+  const visibleRouteAlerts = prefs?.notify_route !== false ? routeAlerts : [];
 
   if (loading) {
     return (
@@ -483,7 +458,7 @@ export default function HomeScreen({ navigation }) {
             <Marker
               coordinate={{ latitude: alert.latitude, longitude: alert.longitude }}
               title={alert.source === 'bluetooth' ? 'Ice Detected (Bluetooth)' : 'Black Ice Detected'}
-              description={`Confidence: ${Math.round(alert.confidence * 100)}%${alert.distanceM ? `  Distance: ${Math.round(alert.distanceM)}m` : ''}`}
+              description={`Confidence: ${Math.round(alert.confidence * 100)}%  Device: ${alert.device_id || 'unknown'}${alert.distanceM ? `  Distance: ${Math.round(alert.distanceM)}m` : ''}`}
               pinColor={alert.source === 'bluetooth' ? '#4fc3f7' : getAlertColor(alert.confidence)}
             />
           </React.Fragment>
@@ -523,7 +498,7 @@ export default function HomeScreen({ navigation }) {
         if (!locationRef.current) return;
         const result = await fetchAlerts(locationRef.current.latitude, locationRef.current.longitude, 2000);
         setAllAlerts(result.alerts);
-        setFetchSource(result.source);
+        setFetchSource(prev => prev === FetchSource.WEBSOCKET ? FetchSource.WEBSOCKET : result.source);
         setCacheAge(result.cacheAge);
         setLastUpdated(new Date());
       }}>
