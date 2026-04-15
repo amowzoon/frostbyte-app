@@ -18,6 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const POLL_INTERVAL_MS = 30000;
 const DEFAULT_WARN_SECONDS = 10;
+const BLE_PROXIMITY_RADIUS_M = 80;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -43,6 +44,7 @@ export default function HomeScreen({ navigation }) {
   const [cacheAge, setCacheAge] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [bleScanning, setBleScanning] = useState(false);
 
   const [destQuery, setDestQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
@@ -182,8 +184,6 @@ export default function HomeScreen({ navigation }) {
           .catch(() => {});
       }, POLL_INTERVAL_MS);
 
-      startBleScan();
-
       wsSub.current = subscribeToAlerts((alert) => {
         setAllAlerts(prev => {
           if (prev.find(a => a.id === alert.id)) return prev;
@@ -207,7 +207,65 @@ export default function HomeScreen({ navigation }) {
     setLastUpdated(new Date());
   }, []);
 
-  const startBleScan = () => {
+  // Internet-based proximity scan — finds active FrostByte devices near user via backend
+  const startInternetProximityScan = async () => {
+    if (!locationRef.current) {
+      Alert.alert('No location', 'Waiting for GPS fix.');
+      return;
+    }
+    setBleScanning(true);
+    try {
+      const { data } = await client.get('/api/app/devices/nearby', {
+        params: {
+          lat: locationRef.current.latitude,
+          lon: locationRef.current.longitude,
+          radius_m: BLE_PROXIMITY_RADIUS_M,
+        },
+      });
+      const devices = data.devices || [];
+      if (devices.length === 0) {
+        Alert.alert('No devices found', 'No active FrostByte devices detected within 80m via network.');
+      } else {
+        // Merge into allAlerts so proximity results follow same pipeline as server alerts
+        const mapped = devices.map(d => ({
+          id: `proximity-${d.device_id}`,
+          device_id: d.device_id,
+          latitude: d.latitude,
+          longitude: d.longitude,
+          confidence: d.confidence,
+          alert_type: 'proximity',
+          distanceM: d.distance_m,
+        }));
+        setAllAlerts(prev => {
+          const filtered = prev.filter(a => !a.id?.startsWith('proximity-'));
+          return [...filtered, ...mapped];
+        });
+        // Fire push notification for each detected device
+        for (const d of devices) {
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: 'FrostByte device nearby',
+              body: `Device ${d.device_id} detected ${d.distance_m}m away with ${Math.round(d.confidence * 100)}% ice confidence.`,
+            },
+            trigger: null,
+          });
+        }
+        Alert.alert(
+          'Devices found',
+          `${devices.length} FrostByte device${devices.length > 1 ? 's' : ''} detected nearby via network.
+
+` +
+          devices.map(d => `• ${d.device_id} — ${d.distance_m}m away (${Math.round(d.confidence * 100)}% confidence)`).join('')
+        );
+      }
+    } catch (err) {
+      Alert.alert('Scan failed', 'Could not reach the server. Internet connection required for network scan.');
+    } finally {
+      setBleScanning(false);
+    }
+  };
+
+  const startNativeBle = () => {
     if (stopBleScan.current) stopBleScan.current();
     stopBleScan.current = scanForFrostByteDevices((device) => {
       setBleAlerts(prev => {
@@ -220,6 +278,20 @@ export default function HomeScreen({ navigation }) {
         return [...prev, device];
       });
     }, 15000);
+  };
+
+  const handleBleButton = () => {
+    Alert.alert(
+      'Proximity Detection',
+      'FrostByte supports two proximity detection modes:\n\n' +
+      '• Network scan — finds active FrostByte devices within 80m using the internet. Works in Expo Go.\n\n' +
+      '• Native Bluetooth — scans directly for nearby BLE devices without internet. Requires a standalone build.',
+      [
+        { text: 'Scan via Network', onPress: startInternetProximityScan },
+        { text: 'Scan via Bluetooth', onPress: startNativeBle },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
   };
 
   const handleSearchChange = (text) => {
@@ -400,7 +472,7 @@ export default function HomeScreen({ navigation }) {
               ? `${allMapAlerts.length} alert${allMapAlerts.length > 1 ? 's' : ''} nearby`
               : 'No ice alerts in your area'
             }
-            {bleAlerts.length > 0 ? `  (${bleAlerts.length} via Bluetooth)` : ''}
+            {bleAlerts.length > 0 ? `  (${bleAlerts.length} via proximity)` : ''}
           </Text>
           <Text style={styles.sourceLabel}>{getSourceLabel()}</Text>
         </View>
@@ -457,9 +529,9 @@ export default function HomeScreen({ navigation }) {
             />
             <Marker
               coordinate={{ latitude: alert.latitude, longitude: alert.longitude }}
-              title={alert.source === 'bluetooth' ? 'Ice Detected (Bluetooth)' : 'Black Ice Detected'}
-              description={`Confidence: ${Math.round(alert.confidence * 100)}%  Device: ${alert.device_id || 'unknown'}${alert.distanceM ? `  Distance: ${Math.round(alert.distanceM)}m` : ''}`}
-              pinColor={alert.source === 'bluetooth' ? '#4fc3f7' : getAlertColor(alert.confidence)}
+              title={alert.alert_type === 'proximity' ? 'Ice Detected (Proximity)' : 'Black Ice Detected'}
+              description={`Confidence: ${Math.round(alert.confidence * 100)}%  Device: ${alert.device_id || alert.deviceId || 'unknown'}${alert.distanceM ? `  Distance: ${Math.round(alert.distanceM)}m` : ''}`}
+              pinColor={alert.alert_type === 'proximity' ? '#4fc3f7' : getAlertColor(alert.confidence)}
             />
           </React.Fragment>
         ))}
@@ -494,19 +566,17 @@ export default function HomeScreen({ navigation }) {
         <MaterialIcons name="my-location" size={22} color="#fff" />
       </TouchableOpacity>
 
-      <TouchableOpacity style={[styles.iconButton, styles.refreshIconButton]} onPress={async () => {
-        if (!locationRef.current) return;
-        const result = await fetchAlerts(locationRef.current.latitude, locationRef.current.longitude, 2000);
-        setAllAlerts(result.alerts);
-        setFetchSource(prev => prev === FetchSource.WEBSOCKET ? FetchSource.WEBSOCKET : result.source);
-        setCacheAge(result.cacheAge);
-        setLastUpdated(new Date());
-      }}>
-        <MaterialIcons name="refresh" size={22} color="#fff" />
-      </TouchableOpacity>
 
-      <TouchableOpacity style={[styles.iconButton, styles.bleIconButton]} onPress={startBleScan}>
-        <MaterialIcons name="bluetooth-searching" size={22} color="#4fc3f7" />
+
+      <TouchableOpacity
+        style={[styles.iconButton, styles.bleIconButton, bleScanning && styles.bleIconScanning]}
+        onPress={handleBleButton}
+        disabled={bleScanning}
+      >
+        {bleScanning
+          ? <ActivityIndicator size="small" color="#4fc3f7" />
+          : <MaterialIcons name="bluetooth-searching" size={22} color="#4fc3f7" />
+        }
       </TouchableOpacity>
 
       <View style={styles.legend}>
@@ -525,7 +595,7 @@ export default function HomeScreen({ navigation }) {
         </View>
         <View style={styles.legendRow}>
           <View style={[styles.legendDot, { backgroundColor: '#4fc3f7' }]} />
-          <Text style={styles.legendText}>Bluetooth</Text>
+          <Text style={styles.legendText}>Proximity</Text>
         </View>
         {routeCoords && (
           <>
@@ -576,7 +646,7 @@ const styles = StyleSheet.create({
   map: { flex: 1 },
   iconButton: { position: 'absolute', bottom: 200, right: 16, backgroundColor: '#1a1a2e', borderRadius: 28, width: 48, height: 48, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 5, borderWidth: 1, borderColor: '#0f3460' },
   bleIconButton: { bottom: 260, backgroundColor: '#0f3460', borderColor: '#4fc3f7' },
-  refreshIconButton: { bottom: 140 },
+  bleIconScanning: { opacity: 0.6 },
   legend: { position: 'absolute', bottom: 40, left: 16, backgroundColor: 'rgba(26, 26, 46, 0.92)', borderRadius: 10, padding: 12, minWidth: 150 },
   legendTitle: { color: '#fff', fontSize: 12, fontWeight: 'bold', marginBottom: 6 },
   legendRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
