@@ -6,6 +6,7 @@ import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
 import HomeScreen from './screens/HomeScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import AlertsScreen from './screens/AlertsScreen';
 import { registerBackgroundAlertTask } from './lib/backgroundAlertTask';
 
 const Stack = createStackNavigator();
@@ -28,12 +29,13 @@ const AppNavigator = React.memo(function AppNavigator() {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {isLoggedIn || isGuest ? (
           <>
-            <Stack.Screen name="Home" component={HomeScreen} />
+            <Stack.Screen name="Home"     component={HomeScreen}     />
             <Stack.Screen name="Settings" component={SettingsScreen} />
+            <Stack.Screen name="Alerts"   component={AlertsScreen}   />
           </>
         ) : (
           <>
-            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="Login"    component={LoginScreen}    />
             <Stack.Screen name="Register" component={RegisterScreen} />
           </>
         )}
