@@ -465,7 +465,7 @@ export default function HomeScreen({ navigation }) {
         )}
       </View>
 
-      <View style={[styles.banner, { backgroundColor: getSourceColor() }]}>
+      <TouchableOpacity style={[styles.banner, { backgroundColor: getSourceColor() }]} onPress={() => navigation.navigate('Alerts')} activeOpacity={0.85}>
         <View style={styles.bannerRow}>
           <Text style={styles.bannerText}>
             {allMapAlerts.length > 0
@@ -499,7 +499,8 @@ export default function HomeScreen({ navigation }) {
         {lastUpdated && (
           <Text style={styles.bannerSub}>Updated {lastUpdated.toLocaleTimeString()}</Text>
         )}
-      </View>
+        <Text style={styles.bannerTap}>Tap for details ›</Text>
+      </TouchableOpacity>
 
       <MapView
         ref={mapRef}
@@ -643,6 +644,7 @@ const styles = StyleSheet.create({
   routeInfoText: { color: '#ccc', fontSize: 11, flex: 1 },
   clearRoute: { color: '#aaa', fontSize: 14, paddingLeft: 8 },
   bannerSub: { color: '#888', fontSize: 11, marginTop: 2 },
+  bannerTap: { color: '#4fc3f7', fontSize: 10, marginTop: 4, opacity: 0.8 },
   map: { flex: 1 },
   iconButton: { position: 'absolute', bottom: 200, right: 16, backgroundColor: '#1a1a2e', borderRadius: 28, width: 48, height: 48, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 5, borderWidth: 1, borderColor: '#0f3460' },
   bleIconButton: { bottom: 260, backgroundColor: '#0f3460', borderColor: '#4fc3f7' },
