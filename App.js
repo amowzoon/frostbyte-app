@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -17,9 +18,7 @@ const AppNavigator = React.memo(function AppNavigator() {
   useEffect(() => {
     if (isLoggedIn || isGuest) {
       registerBackgroundAlertTask().then(success => {
-        if (success) {
-          console.log('Background alert task registered');
-        }
+        if (success) console.log('Background alert task registered');
       });
     }
   }, [isLoggedIn, isGuest]);
@@ -29,13 +28,13 @@ const AppNavigator = React.memo(function AppNavigator() {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {isLoggedIn || isGuest ? (
           <>
-            <Stack.Screen name="Home"     component={HomeScreen}     />
+            <Stack.Screen name="Home"     component={HomeScreen} />
             <Stack.Screen name="Settings" component={SettingsScreen} />
-            <Stack.Screen name="Alerts"   component={AlertsScreen}   />
+            <Stack.Screen name="Alerts"   component={AlertsScreen} />
           </>
         ) : (
           <>
-            <Stack.Screen name="Login"    component={LoginScreen}    />
+            <Stack.Screen name="Login"    component={LoginScreen} />
             <Stack.Screen name="Register" component={RegisterScreen} />
           </>
         )}
@@ -46,8 +45,10 @@ const AppNavigator = React.memo(function AppNavigator() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppNavigator />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppNavigator />
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
