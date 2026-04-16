@@ -1,11 +1,10 @@
 import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { getSecure, TOKEN_KEY } from '../lib/secureStorage';
 
 // Set via BACKEND_URL env var at eas update time.
-// Default: local network IP for testing against local Docker stack.
-// Linux machine (tunnel): BACKEND_URL=http://localhost:8080 eas update
-// Linux machine (same LAN): BACKEND_URL=http://<linux-ip>:<port> eas update
+// Local dev: BACKEND_URL=http://10.0.0.18:8001 eas update --branch main
+// Production: BACKEND_URL=https://superprosperous-arnulfo-pebbly.ngrok-free.dev eas update --branch main
 export const BASE_URL = Constants.expoConfig.extra.backendUrl;
 
 const client = axios.create({
@@ -13,9 +12,9 @@ const client = axios.create({
   timeout: 10000,
 });
 
-// Attach JWT from AsyncStorage to every request
+// Attach JWT from SecureStore to every request
 client.interceptors.request.use(async (config) => {
-  const token = await AsyncStorage.getItem('auth_token');
+  const token = await getSecure(TOKEN_KEY);
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
