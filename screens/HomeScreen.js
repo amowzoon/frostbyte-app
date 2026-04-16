@@ -12,6 +12,7 @@ import client from '../api/client';
 import { filterAlertsByRadius, getRouteAlerts, updateHeadingHistory, resetHeadingHistory } from '../lib/routeAlert';
 import { scanForFrostByteDevices } from '../lib/bleManager';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext'; // NEW
 import { MaterialIcons } from '@expo/vector-icons';
 import { searchPlaces, fetchRoute, checkRouteForIce, splitRouteSegments } from '../lib/routeNav';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,8 +31,10 @@ Notifications.setNotificationHandler({
 
 export default function HomeScreen({ navigation }) {
   const { logout, isGuest, userId, prefs, warnSeconds } = useAuth();
+  const { theme } = useTheme(); // NEW
 
   const alertRadius = prefs?.alert_radius_m ?? 500;
+  const confMin = prefs?.conf_min ?? 0; // NEW — confidence filter set in Settings
 
   const [location, setLocation] = useState(null);
   const [heading, setHeading] = useState(null);
@@ -45,6 +48,7 @@ export default function HomeScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [bleScanning, setBleScanning] = useState(false);
+  const [mapType, setMapType] = useState('standard'); // NEW — satellite toggle
 
   const [destQuery, setDestQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
@@ -207,7 +211,7 @@ export default function HomeScreen({ navigation }) {
     setLastUpdated(new Date());
   }, []);
 
-  // Internet-based proximity scan — finds active FrostByte devices near user via backend
+  // Internet-based proximity scan
   const startInternetProximityScan = async () => {
     if (!locationRef.current) {
       Alert.alert('No location', 'Waiting for GPS fix.');
@@ -226,7 +230,6 @@ export default function HomeScreen({ navigation }) {
       if (devices.length === 0) {
         Alert.alert('No devices found', 'No active FrostByte devices detected within 80m via network.');
       } else {
-        // Merge into allAlerts so proximity results follow same pipeline as server alerts
         const mapped = devices.map(d => ({
           id: `proximity-${d.device_id}`,
           device_id: d.device_id,
@@ -240,7 +243,6 @@ export default function HomeScreen({ navigation }) {
           const filtered = prev.filter(a => !a.id?.startsWith('proximity-'));
           return [...filtered, ...mapped];
         });
-        // Fire push notification for each detected device
         for (const d of devices) {
           await Notifications.scheduleNotificationAsync({
             content: {
@@ -252,10 +254,8 @@ export default function HomeScreen({ navigation }) {
         }
         Alert.alert(
           'Devices found',
-          `${devices.length} FrostByte device${devices.length > 1 ? 's' : ''} detected nearby via network.
-
-` +
-          devices.map(d => `• ${d.device_id} — ${d.distance_m}m away (${Math.round(d.confidence * 100)}% confidence)`).join('')
+          `${devices.length} FrostByte device${devices.length > 1 ? 's' : ''} detected nearby via network.\n\n` +
+          devices.map(d => `\u2022 ${d.device_id} \u2014 ${d.distance_m}m away (${Math.round(d.confidence * 100)}% confidence)`).join('\n')
         );
       }
     } catch (err) {
@@ -284,8 +284,8 @@ export default function HomeScreen({ navigation }) {
     Alert.alert(
       'Proximity Detection',
       'FrostByte supports two proximity detection modes:\n\n' +
-      '• Network scan — finds active FrostByte devices within 80m using the internet. Works in Expo Go.\n\n' +
-      '• Native Bluetooth — scans directly for nearby BLE devices without internet. Requires a standalone build.',
+      '\u2022 Network scan \u2014 finds active FrostByte devices within 80m using the internet. Works in Expo Go.\n\n' +
+      '\u2022 Native Bluetooth \u2014 scans directly for nearby BLE devices without internet. Requires a standalone build.',
       [
         { text: 'Scan via Network', onPress: startInternetProximityScan },
         { text: 'Scan via Bluetooth', onPress: startNativeBle },
@@ -331,7 +331,7 @@ export default function HomeScreen({ navigation }) {
       });
     }
     if (iceOnRoute.length > 0) {
-      Alert.alert('⚠️ Ice on your route',
+      Alert.alert('\u26a0\ufe0f Ice on your route',
         `${iceOnRoute.length} ice alert${iceOnRoute.length > 1 ? 's' : ''} detected along your route.`
       );
     }
@@ -362,13 +362,14 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
+  // NEW: theme-aware banner background
   const getSourceColor = () => {
     switch (fetchSource) {
-      case FetchSource.WEBSOCKET: return '#1a3d1a';
-      case FetchSource.BACKEND:   return '#1a2a3d';
-      case FetchSource.CACHE:     return '#3d3a1a';
-      case FetchSource.NONE:      return '#3d1a1a';
-      default:                    return '#1a1a2e';
+      case FetchSource.WEBSOCKET: return theme.mode === 'light' ? '#d4edda' : '#1a3d1a';
+      case FetchSource.BACKEND:   return theme.mode === 'light' ? '#d0e8ff' : '#1a2a3d';
+      case FetchSource.CACHE:     return theme.mode === 'light' ? '#fff3cd' : '#3d3a1a';
+      case FetchSource.NONE:      return theme.mode === 'light' ? '#f8d7da' : '#3d1a1a';
+      default:                    return theme.mode === 'light' ? '#f0f0f0'  : '#1a1a2e';
     }
   };
 
@@ -383,27 +384,29 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
+  // NEW: apply confMin filter from prefs before rendering markers
   const allMapAlerts = [
     ...(prefs?.notify_ice !== false ? nearbyAlerts : []),
     ...(prefs?.notify_bluetooth !== false ? bleAlerts.map(b => ({ ...b, id: `ble-${b.deviceId}` })) : []),
-  ];
+  ].filter(a => (a.confidence ?? 0) >= confMin);
+
   const visibleRouteAlerts = prefs?.notify_route !== false ? routeAlerts : [];
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={[styles.loadingContainer, { backgroundColor: theme.bg }]}>
         <ActivityIndicator size="large" color="#4fc3f7" />
-        <Text style={styles.loadingText}>Getting your location...</Text>
+        <Text style={[styles.loadingText, { color: theme.textMuted }]}>Getting your location...</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
+    <View style={[styles.container, { backgroundColor: theme.bg }]}>
+      <View style={[styles.header, { backgroundColor: theme.bg }]}>
         <View style={styles.headerTop}>
           <View>
-            <Text style={styles.headerTitle}>FrostByte</Text>
+            <Text style={[styles.headerTitle, { color: theme.text }]}>FrostByte</Text>
             {isGuest && <Text style={styles.guestBadge}>Guest Mode</Text>}
           </View>
           <View style={styles.headerRight}>
@@ -418,12 +421,12 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
 
-        <View style={styles.searchBar}>
-          <MaterialIcons name="search" size={18} color="#666" style={{ marginRight: 6 }} />
+        <View style={[styles.searchBar, { backgroundColor: theme.bgInput, borderColor: theme.border }]}>
+          <MaterialIcons name="search" size={18} color={theme.textSubtle} style={{ marginRight: 6 }} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: theme.text }]}
             placeholder="Search destination..."
-            placeholderTextColor="#555"
+            placeholderTextColor={theme.textSubtle}
             value={destQuery}
             onChangeText={handleSearchChange}
             onFocus={() => setSearchFocused(true)}
@@ -433,13 +436,13 @@ export default function HomeScreen({ navigation }) {
           {routeLoading && <ActivityIndicator size="small" color="#4fc3f7" style={{ marginRight: 6 }} />}
           {destQuery.length > 0 && (
             <TouchableOpacity onPress={clearRoute} style={styles.searchClear}>
-              <MaterialIcons name="close" size={16} color="#888" />
+              <MaterialIcons name="close" size={16} color={theme.textSubtle} />
             </TouchableOpacity>
           )}
         </View>
 
         {searchFocused && (suggestions.length > 0 || suggestionsLoading) && (
-          <View style={styles.suggestions}>
+          <View style={[styles.suggestions, { backgroundColor: theme.bgCard, borderColor: theme.border }]}>
             {suggestionsLoading && suggestions.length === 0 && (
               <View style={styles.suggestionItem}>
                 <ActivityIndicator size="small" color="#4fc3f7" />
@@ -448,13 +451,13 @@ export default function HomeScreen({ navigation }) {
             {suggestions.map((place, i) => (
               <TouchableOpacity
                 key={i}
-                style={[styles.suggestionItem, i < suggestions.length - 1 && styles.suggestionBorder]}
+                style={[styles.suggestionItem, i < suggestions.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.border }]}
                 onPress={() => handleSelectSuggestion(place)}
               >
                 <MaterialIcons name="place" size={16} color="#4fc3f7" style={{ marginRight: 8 }} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.suggestionMain} numberOfLines={1}>{place.shortName}</Text>
-                  <Text style={styles.suggestionSub} numberOfLines={1}>{place.displayName}</Text>
+                  <Text style={[styles.suggestionMain, { color: theme.text }]} numberOfLines={1}>{place.shortName}</Text>
+                  <Text style={[styles.suggestionSub, { color: theme.textMuted }]} numberOfLines={1}>{place.displayName}</Text>
                 </View>
                 {place.distLabel && (
                   <Text style={styles.suggestionDist}>{place.distLabel}</Text>
@@ -465,46 +468,53 @@ export default function HomeScreen({ navigation }) {
         )}
       </View>
 
-      <TouchableOpacity style={[styles.banner, { backgroundColor: getSourceColor() }]} onPress={() => navigation.navigate('Alerts')} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={[styles.banner, { backgroundColor: getSourceColor() }]}
+        onPress={() => navigation.navigate('Alerts')}
+        activeOpacity={0.85}
+      >
         <View style={styles.bannerRow}>
-          <Text style={styles.bannerText}>
+          <Text style={[styles.bannerText, { color: theme.text }]}>
             {allMapAlerts.length > 0
               ? `${allMapAlerts.length} alert${allMapAlerts.length > 1 ? 's' : ''} nearby`
               : 'No ice alerts in your area'
             }
             {bleAlerts.length > 0 ? `  (${bleAlerts.length} via proximity)` : ''}
+            {confMin > 0 ? `  \u2265${Math.round(confMin * 100)}%` : ''}
           </Text>
-          <Text style={styles.sourceLabel}>{getSourceLabel()}</Text>
+          <Text style={[styles.sourceLabel, { color: theme.textMuted }]}>{getSourceLabel()}</Text>
         </View>
         {visibleRouteAlerts.length > 0 && (
           <Text style={styles.routeWarning}>
-            Ice on your route — {visibleRouteAlerts[0].etaLabel === 'now'
+            Ice on your route \u2014 {visibleRouteAlerts[0].etaLabel === 'now'
               ? 'entering ice zone now'
               : `${visibleRouteAlerts[0].etaLabel} ahead`}
           </Text>
         )}
         {routeInfo && (
           <View style={styles.routeInfoRow}>
-            <Text style={styles.routeInfoText}>
-              📍 {routeInfo.distanceKm}km · {routeInfo.durationMin}min
+            <Text style={[styles.routeInfoText, { color: theme.textMuted }]}>
+              {'\ud83d\udccd'} {routeInfo.distanceKm}km {'\u00b7'} {routeInfo.durationMin}min
               {routeIceAlerts.length > 0
-                ? `  ·  ⚠️ ${routeIceAlerts.length} ice zone${routeIceAlerts.length > 1 ? 's' : ''}`
-                : '  ·  ✅ Clear'}
+                ? `  \u00b7  \u26a0\ufe0f ${routeIceAlerts.length} ice zone${routeIceAlerts.length > 1 ? 's' : ''}`
+                : '  \u00b7  \u2705 Clear'}
             </Text>
             <TouchableOpacity onPress={clearRoute}>
-              <Text style={styles.clearRoute}>✕</Text>
+              <Text style={[styles.clearRoute, { color: theme.textMuted }]}>{'\u2715'}</Text>
             </TouchableOpacity>
           </View>
         )}
         {lastUpdated && (
-          <Text style={styles.bannerSub}>Updated {lastUpdated.toLocaleTimeString()}</Text>
+          <Text style={[styles.bannerSub, { color: theme.textSubtle }]}>Updated {lastUpdated.toLocaleTimeString()}</Text>
         )}
-        <Text style={styles.bannerTap}>Tap for details ›</Text>
+        <Text style={styles.bannerTap}>Tap for details {'\u203a'}</Text>
       </TouchableOpacity>
 
+      {/* NEW: mapType prop for satellite toggle */}
       <MapView
         ref={mapRef}
         style={styles.map}
+        mapType={mapType}
         initialRegion={location ? {
           latitude: location.latitude,
           longitude: location.longitude,
@@ -563,11 +573,31 @@ export default function HomeScreen({ navigation }) {
         )}
       </MapView>
 
-      <TouchableOpacity style={styles.iconButton} onPress={centerOnUser}>
-        <MaterialIcons name="my-location" size={22} color="#fff" />
+      <TouchableOpacity
+        style={[styles.iconButton, { backgroundColor: theme.mode === 'light' ? '#fff' : '#1a1a2e', borderColor: theme.border }]}
+        onPress={centerOnUser}
+      >
+        <MaterialIcons name="my-location" size={22} color="#4fc3f7" />
       </TouchableOpacity>
 
-
+      {/* NEW: satellite toggle — stacked above center button */}
+      <TouchableOpacity
+        style={[
+          styles.iconButton,
+          styles.satelliteButton,
+          {
+            backgroundColor: mapType === 'satellite' ? '#0f3460' : (theme.mode === 'light' ? '#fff' : '#1a1a2e'),
+            borderColor: mapType === 'satellite' ? '#4fc3f7' : theme.border,
+          },
+        ]}
+        onPress={() => setMapType(t => t === 'standard' ? 'satellite' : 'standard')}
+      >
+        <MaterialIcons
+          name={mapType === 'satellite' ? 'map' : 'satellite'}
+          size={22}
+          color={mapType === 'satellite' ? '#4fc3f7' : (theme.mode === 'light' ? '#555' : '#aaa')}
+        />
+      </TouchableOpacity>
 
       <TouchableOpacity
         style={[styles.iconButton, styles.bleIconButton, bleScanning && styles.bleIconScanning]}
@@ -580,33 +610,33 @@ export default function HomeScreen({ navigation }) {
         }
       </TouchableOpacity>
 
-      <View style={styles.legend}>
-        <Text style={styles.legendTitle}>Risk Level</Text>
+      <View style={[styles.legend, { backgroundColor: theme.mode === 'light' ? 'rgba(255,255,255,0.92)' : 'rgba(26, 26, 46, 0.92)' }]}>
+        <Text style={[styles.legendTitle, { color: theme.text }]}>Risk Level</Text>
         <View style={styles.legendRow}>
           <View style={[styles.legendDot, { backgroundColor: '#ff3b30' }]} />
-          <Text style={styles.legendText}>High over 75%</Text>
+          <Text style={[styles.legendText, { color: theme.textMuted }]}>High over 75%</Text>
         </View>
         <View style={styles.legendRow}>
           <View style={[styles.legendDot, { backgroundColor: '#ff9500' }]} />
-          <Text style={styles.legendText}>Medium 50–75%</Text>
+          <Text style={[styles.legendText, { color: theme.textMuted }]}>Medium 50{'\u201375'}%</Text>
         </View>
         <View style={styles.legendRow}>
           <View style={[styles.legendDot, { backgroundColor: '#ffcc00' }]} />
-          <Text style={styles.legendText}>Low under 50%</Text>
+          <Text style={[styles.legendText, { color: theme.textMuted }]}>Low under 50%</Text>
         </View>
         <View style={styles.legendRow}>
           <View style={[styles.legendDot, { backgroundColor: '#4fc3f7' }]} />
-          <Text style={styles.legendText}>Proximity</Text>
+          <Text style={[styles.legendText, { color: theme.textMuted }]}>Proximity</Text>
         </View>
         {routeCoords && (
           <>
             <View style={styles.legendRow}>
               <View style={[styles.legendDot, { backgroundColor: '#4fc3f7', borderRadius: 0 }]} />
-              <Text style={styles.legendText}>Route (clear)</Text>
+              <Text style={[styles.legendText, { color: theme.textMuted }]}>Route (clear)</Text>
             </View>
             <View style={styles.legendRow}>
               <View style={[styles.legendDot, { backgroundColor: '#ff3b30', borderRadius: 0 }]} />
-              <Text style={styles.legendText}>Route (ice)</Text>
+              <Text style={[styles.legendText, { color: theme.textMuted }]}>Route (ice)</Text>
             </View>
           </>
         )}
@@ -631,7 +661,6 @@ const styles = StyleSheet.create({
   searchClear: { padding: 4 },
   suggestions: { marginHorizontal: 16, marginTop: 4, backgroundColor: '#0f1b2d', borderRadius: 10, borderWidth: 1, borderColor: '#0f3460', overflow: 'hidden', zIndex: 200 },
   suggestionItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10 },
-  suggestionBorder: { borderBottomWidth: 1, borderBottomColor: '#1a2a3d' },
   suggestionMain: { color: '#fff', fontSize: 13, fontWeight: '500' },
   suggestionSub: { color: '#666', fontSize: 11, marginTop: 1 },
   suggestionDist: { color: '#4fc3f7', fontSize: 11, marginLeft: 8, flexShrink: 0 },
@@ -647,7 +676,8 @@ const styles = StyleSheet.create({
   bannerTap: { color: '#4fc3f7', fontSize: 10, marginTop: 4, opacity: 0.8 },
   map: { flex: 1 },
   iconButton: { position: 'absolute', bottom: 200, right: 16, backgroundColor: '#1a1a2e', borderRadius: 28, width: 48, height: 48, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 5, borderWidth: 1, borderColor: '#0f3460' },
-  bleIconButton: { bottom: 260, backgroundColor: '#0f3460', borderColor: '#4fc3f7' },
+  satelliteButton: { bottom: 260 }, // NEW — sits between center (200) and BLE (320)
+  bleIconButton: { bottom: 320, backgroundColor: '#0f3460', borderColor: '#4fc3f7' },
   bleIconScanning: { opacity: 0.6 },
   legend: { position: 'absolute', bottom: 40, left: 16, backgroundColor: 'rgba(26, 26, 46, 0.92)', borderRadius: 10, padding: 12, minWidth: 150 },
   legendTitle: { color: '#fff', fontSize: 12, fontWeight: 'bold', marginBottom: 6 },
