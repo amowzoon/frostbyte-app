@@ -9,12 +9,6 @@ import client from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext'; // NEW
 
-const PERIODS = [
-  { label: 'Today',     value: 'today' },
-  { label: 'This week', value: 'week'  },
-  { label: 'This month',value: 'month' },
-];
-
 function formatTime(iso) {
   const d = new Date(iso);
   return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -31,21 +25,20 @@ const dotStyles = StyleSheet.create({
 
 export default function AlertsScreen({ navigation }) {
   const { prefs } = useAuth();
-  const { theme } = useTheme(); // NEW
+  const { theme } = useTheme();
 
-  const [period, setPeriod] = useState('today');
   const [alerts, setAlerts] = useState([]);
   const [devices, setDevices] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async (p = period) => {
+  const load = useCallback(async () => {
     try {
       const [alertsRes, devicesRes, statsRes] = await Promise.all([
-        client.get('/api/app/alerts/history', { params: { period: p } }),
+        client.get('/api/app/alerts/history', { params: { period: 'today' } }),
         client.get('/api/app/devices'),
-        client.get('/api/app/stats', { params: { period: p } }),
+        client.get('/api/app/stats', { params: { period: 'today' } }),
       ]);
       setAlerts(alertsRes.data.alerts || []);
       setDevices(devicesRes.data.devices || []);
@@ -56,19 +49,13 @@ export default function AlertsScreen({ navigation }) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [period]);
+  }, []);
 
   useEffect(() => { load(); }, []);
 
-  const onPeriodChange = (p) => {
-    setPeriod(p);
-    setLoading(true);
-    load(p);
-  };
-
   const onRefresh = () => {
     setRefreshing(true);
-    load(period);
+    load();
   };
 
   // NEW: theme-driven colors
@@ -89,23 +76,6 @@ export default function AlertsScreen({ navigation }) {
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: textPrim }]}>Alert Dashboard</Text>
         <View style={{ width: 44 }} />
-      </View>
-
-      {/* Period selector */}
-      <View style={[styles.periodRow, { backgroundColor: bg }]}>
-        {PERIODS.map(p => (
-          <TouchableOpacity
-            key={p.value}
-            style={[styles.periodBtn, { backgroundColor: cardBg, borderColor: border },
-              period === p.value && { backgroundColor: border, borderColor: accent }]}
-            onPress={() => onPeriodChange(p.value)}
-          >
-            <Text style={[styles.periodLabel, { color: textMuted },
-              period === p.value && { color: accent }]}>
-              {p.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
       </View>
 
       {loading ? (
