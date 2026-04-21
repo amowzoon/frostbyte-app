@@ -15,49 +15,38 @@ const THUMB = 28;
 const TRACK_H = 4;
 
 function CustomSlider({ value, minimumValue, maximumValue, step, onValueChange }) {
-  const trackRef = useRef(null);
-  const trackPageXRef = useRef(0);
-  const trackWidthRef = useRef(0);
+  const containerRef = useRef(null);
+  const containerPageXRef = useRef(0);
+  const containerWidthRef = useRef(0);
   const isDragging = useRef(false);
-  const [thumbPct, setThumbPct] = useState(null);
-  const [layoutDone, setLayoutDone] = useState(false);
+  const [pct, setPct] = useState(() => (value - minimumValue) / (maximumValue - minimumValue));
+  const [ready, setReady] = useState(false);
 
   const clamp = (v) => Math.max(minimumValue, Math.min(maximumValue, v));
-  const toPercent = (v) => (clamp(v) - minimumValue) / (maximumValue - minimumValue);
-  const toValue = (pct) => {
-    const raw = minimumValue + Math.max(0, Math.min(1, pct)) * (maximumValue - minimumValue);
+  const toValue = (p) => {
+    const raw = minimumValue + Math.max(0, Math.min(1, p)) * (maximumValue - minimumValue);
     return step ? Math.round(raw / step) * step : raw;
   };
 
-  const measure = (cb) => {
-    if (trackRef.current) {
-      trackRef.current.measure((x, y, w, h, pageX) => {
-        trackPageXRef.current = pageX;
-        trackWidthRef.current = w;
-        if (cb) cb(w);
-      });
-    }
-  };
-
-  const onLayout = () => {
-    measure((w) => {
-      setThumbPct(toPercent(value));
-      setLayoutDone(true);
-    });
-  };
-
   React.useEffect(() => {
-    if (layoutDone && !isDragging.current) {
-      setThumbPct(toPercent(value));
+    if (!isDragging.current) {
+      setPct((clamp(value) - minimumValue) / (maximumValue - minimumValue));
     }
-  }, [value, layoutDone]);
+  }, [value]);
+
+  const onLayout = (e) => {
+    // Use layout width directly — no async measure() call needed here
+    containerWidthRef.current = e.nativeEvent.layout.width;
+    setReady(true);
+  };
 
   const handleTouch = (pageX) => {
-    const w = trackWidthRef.current;
-    if (!w) return;
-    const pct = Math.max(0, Math.min(1, (pageX - trackPageXRef.current) / w));
-    setThumbPct(pct);
-    onValueChange && onValueChange(toValue(pct));
+    const w = containerWidthRef.current;
+    const x0 = containerPageXRef.current;
+    if (!w || x0 === 0) return;
+    const p = Math.max(0, Math.min(1, (pageX - x0) / w));
+    setPct(p);
+    onValueChange && onValueChange(toValue(p));
   };
 
   const handlers = {
@@ -65,22 +54,25 @@ function CustomSlider({ value, minimumValue, maximumValue, step, onValueChange }
     onMoveShouldSetResponder: () => true,
     onResponderGrant: (e) => {
       isDragging.current = true;
-      measure();
+      if (containerRef.current) {
+        containerRef.current.measure((fx, fy, fw, fh, px) => {
+          containerPageXRef.current = px;
+          containerWidthRef.current = fw;
+        });
+      }
       handleTouch(e.nativeEvent.pageX);
     },
-    onResponderMove: (e) => {
-      handleTouch(e.nativeEvent.pageX);
-    },
+    onResponderMove: (e) => { handleTouch(e.nativeEvent.pageX); },
     onResponderRelease: () => { isDragging.current = false; },
     onResponderTerminate: () => { isDragging.current = false; },
     onResponderTerminationRequest: () => false,
   };
 
-  const pct = thumbPct ?? toPercent(value);
-  const thumbLeft = layoutDone ? pct * (trackWidthRef.current - THUMB) : null;
+  // thumb center sits at pct * containerWidth, offset by half thumb to center it
+  const thumbLeft = ready ? Math.max(0, Math.min(pct * (containerWidthRef.current - THUMB), containerWidthRef.current - THUMB)) : null;
 
   return (
-    <View ref={trackRef} style={csStyles.container} onLayout={onLayout} {...handlers}>
+    <View ref={containerRef} style={csStyles.container} onLayout={onLayout} {...handlers}>
       <View style={csStyles.track}>
         <View style={[csStyles.fill, { width: `${pct * 100}%` }]} />
       </View>
@@ -175,7 +167,7 @@ export default function SettingsScreen({ navigation }) {
         <Text style={[styles.headerTitle, { color: textPrim }]}>Settings</Text>
         <View style={{ width: 60 }} />
       </View>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" style={{ flex: 1 }} overScrollMode="never">
 
         {/* ── Account (original) ── */}
         <View style={[styles.section, { backgroundColor: cardBg }]}>
