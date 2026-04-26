@@ -486,7 +486,7 @@ export default function HomeScreen({ navigation }) {
         </View>
         {visibleRouteAlerts.length > 0 && (
           <Text style={styles.routeWarning}>
-            Ice on your route \u2014 {visibleRouteAlerts[0].etaLabel === 'now'
+            Ice on your route: {visibleRouteAlerts[0].etaLabel === 'now'
               ? 'entering ice zone now'
               : `${visibleRouteAlerts[0].etaLabel} ahead`}
           </Text>
