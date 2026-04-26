@@ -624,10 +624,12 @@ export default function HomeScreen({ navigation }) {
           <View style={[styles.legendDot, { backgroundColor: '#ffcc00' }]} />
           <Text style={[styles.legendText, { color: theme.textMuted }]}>Low under 50%</Text>
         </View>
-        <View style={styles.legendRow}>
-          <View style={[styles.legendDot, { backgroundColor: '#4fc3f7' }]} />
-          <Text style={[styles.legendText, { color: theme.textMuted }]}>Proximity</Text>
-        </View>
+        {allMapAlerts.some(a => a.alert_type === 'proximity') && (
+          <View style={styles.legendRow}>
+            <View style={[styles.legendDot, { backgroundColor: '#4fc3f7' }]} />
+            <Text style={[styles.legendText, { color: theme.textMuted }]}>Proximity</Text>
+          </View>
+        )}
         {routeCoords && (
           <>
             <View style={styles.legendRow}>
